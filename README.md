@@ -33,11 +33,11 @@ or Bitbucket Data Center — but never posts there.
 
 ## Requirements
 
-- **herdr ≥ 0.7.0** (the plugin system).
+- **herdr ≥ 0.7.5** (the plugin system).
 - **git** on `PATH`.
 - A **truecolor (24-bit)** terminal with Unicode box-drawing support. Pick a theme that matches
   its light or dark background (see [Theme](#theme)).
-- **macOS or Linux.**
+- **macOS, Linux, or Windows.**
 - A forge CLI or token for the **PR** tab, only for the forge(s) you use — everything else
   works without any of them:
   - **`gh`** (the GitHub CLI), authenticated, for a GitHub origin.
@@ -52,6 +52,11 @@ From the herdr marketplace. You get a prebuilt binary, no Rust toolchain:
 ```bash
 herdr plugin install dcieslak19973/herdr-reviewr
 ```
+
+> **`Error { kind: NotFound, message: "program not found" }`** during
+> `herdr plugin install` means herdr could not spawn `git` — it is not installed or not on
+> `PATH` in this shell. Install [Git for Windows](https://gitforwindows.org/) (or
+> `git` via your package manager), open a fresh shell, and re-run the install.
 
 The sidebar **auto-opens for a newly created worktree**, so installing the plugin is enough. Set
 `auto_open = false` to keep it hidden until you ask (see [Configuration](#configuration)). To
@@ -68,7 +73,13 @@ command = "dcieslak19973.reviewr.toggle"   # <plugin_id>.<action_id> — note th
 `cmd+…` chords reach herdr. macOS swallows `alt+…`. With no key bound, run the action once with
 `herdr plugin action invoke toggle --plugin dcieslak19973.reviewr`.
 
-`install.sh` also symlinks the binary onto `PATH` at `~/.local/bin/herdr-reviewr`, so the `herdr-reviewr` CLI (see [Working with agents](#working-with-agents)) works directly once that directory is on your `PATH`.
+> **Windows:** action ids carry a `-windows` suffix — bind
+> `dcieslak19973.reviewr.toggle-windows`, not `.toggle`, and invoke
+> `herdr plugin action invoke toggle-windows --plugin dcieslak19973.reviewr`. Same for `open`
+> and `close` below.
+
+`install.sh` also symlinks the binary onto `PATH` at `~/.local/bin/herdr-reviewr`, so the `herdr-reviewr` CLI (see [Working with agents](#working-with-agents)) works directly once that directory is on your `PATH`. On Windows, `install.ps1` does not modify `PATH`; it prints the
+installed binary's absolute path, so run `herdr-reviewr` commands via that path instead.
 
 Beside `toggle` there are two explicit actions, made for scripts and layout plugins. `open` opens
 the sidebar and does nothing when one is already open. `close` closes it and does nothing when none
@@ -507,9 +518,15 @@ This is a focused, young tool. The known constraints:
   needed.
 
 **Platform**
-- **macOS and Linux only** — no Windows.
+- **macOS, Linux, and Windows.** Windows needs `git` on `PATH` (ships with
+  [Git for Windows](https://gitforwindows.org/)) and herdr 0.7.5+ (older herdrs refuse the
+  manifest's `min_herdr_version` with a clear message). On Windows the action ids carry a
+  `-windows` suffix — bind keys to `dcieslak19973.reviewr.toggle-windows`, not `.toggle`.
 - **Clipboard export** uses `pbcopy` on macOS, or `wl-copy` / `xclip` / `xsel` on Linux. With
-  none installed it says so, and **Send** still works. OSC 52 and Windows are on the roadmap.
+  none installed it says so, and **Send** still works. Windows uses the built-in `clip`. OSC 52
+  is on the roadmap.
+- **Browser open** (the PR tab's `o`) uses `open` on macOS, `xdg-open` on Linux, or `rundll32`
+  on Windows — all three ship with their OS, so this needs no install.
 
 **herdr coupling**
 - **Send needs a findable agent pane** — the agent in your tab, or the sole agent in the

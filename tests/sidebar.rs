@@ -1,7 +1,4 @@
-#![cfg(unix)]
-
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -9,28 +6,56 @@ fn reviewr_bin() -> &'static str {
     env!("CARGO_BIN_EXE_herdr-reviewr")
 }
 
+/// A fake `herdr` that logs its argv and answers `pane list` / `plugin pane open` with
+/// canned JSON. A shell script on unix; a `.cmd` shim delegating to `PowerShell` on Windows
+/// (Rust's `Command` runs `.cmd` files via `cmd.exe`).
 fn fake_herdr(dir: &Path) -> (PathBuf, PathBuf) {
-    let path = dir.join("herdr");
     let log = dir.join("herdr.log");
-    fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  'pane list'*) printf '%s\\n' '{{\"result\":{{\"panes\":[{{\"pane_id\":\"agent-1\",\"label\":\"agent\"}}]}}}}' ;;\n  *) printf '%s\\n' '{{\"result\":{{\"plugin_pane\":{{\"pane\":{{\"pane_id\":\"reviewr-1\"}}}}}}}}' ;;\nesac\n",
-            log.display()
-        ),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&path, permissions).unwrap();
-    (path, log)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("herdr");
+        fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$*\" in\n  'pane list'*) printf '%s\\n' '{{\"result\":{{\"panes\":[{{\"pane_id\":\"agent-1\",\"label\":\"agent\"}}]}}}}' ;;\n  *) printf '%s\\n' '{{\"result\":{{\"plugin_pane\":{{\"pane\":{{\"pane_id\":\"reviewr-1\"}}}}}}}}' ;;\nesac\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).unwrap();
+        (path, log)
+    }
+    #[cfg(windows)]
+    {
+        let script = dir.join("fake_herdr.ps1");
+        fs::write(
+            &script,
+            format!(
+                "$args -join ' ' | Add-Content -Path '{log}'\nif (($args -join ' ') -like 'pane list*') {{\n  Write-Output '{{\"result\":{{\"panes\":[{{\"pane_id\":\"agent-1\",\"label\":\"agent\"}}]}}}}'\n}} else {{\n  Write-Output '{{\"result\":{{\"plugin_pane\":{{\"pane\":{{\"pane_id\":\"reviewr-1\"}}}}}}}}'\n}}\n",
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        let path = dir.join("herdr.cmd");
+        fs::write(
+            &path,
+            format!(
+                "@powershell -NoProfile -ExecutionPolicy Bypass -File \"{}\" %*\r\n",
+                script.display()
+            ),
+        )
+        .unwrap();
+        (path, log)
+    }
 }
 
 fn run(mode: &str, config_dir: &Path, herdr: &Path) -> Output {
-    Command::new("bash")
-        .arg("herdr/sidebar.sh")
+    Command::new(reviewr_bin())
+        .arg("sidebar")
         .arg(mode)
-        .env("HERDR_REVIEWR_BIN", reviewr_bin())
         .env("HERDR_PLUGIN_CONFIG_DIR", config_dir)
         .env("HERDR_BIN_PATH", herdr)
         .env("HERDR_WORKSPACE_ID", "workspace-1")
@@ -103,10 +128,9 @@ fn valid_auto_open_runtime_refusal_remains_silent() {
     let dir = tempfile::tempdir().unwrap();
     let (herdr, log) = fake_herdr(dir.path());
 
-    let output = Command::new("bash")
-        .arg("herdr/sidebar.sh")
+    let output = Command::new(reviewr_bin())
+        .arg("sidebar")
         .arg("auto-open")
-        .env("HERDR_REVIEWR_BIN", reviewr_bin())
         .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
         .env("HERDR_BIN_PATH", &herdr)
         .env_remove("HERDR_WORKSPACE_ID")
@@ -141,10 +165,9 @@ fn valid_non_default_placement_and_direction_reach_herdr_arguments() {
     for (text, placement, direction) in cases {
         fs::write(&config, text).unwrap();
         let _ = fs::remove_file(&log);
-        let output = Command::new("bash")
-            .arg("herdr/sidebar.sh")
+        let output = Command::new(reviewr_bin())
+            .arg("sidebar")
             .arg("open")
-            .env("HERDR_REVIEWR_BIN", reviewr_bin())
             .env("HERDR_PLUGIN_CONFIG_DIR", dir.path())
             .env("HERDR_BIN_PATH", &herdr)
             .env("HERDR_WORKSPACE_ID", "workspace-1")
@@ -159,4 +182,34 @@ fn valid_non_default_placement_and_direction_reach_herdr_arguments() {
             assert!(calls.contains(direction), "{calls}");
         }
     }
+}
+
+/// Pins `sidebar::entrypoint()`'s two hardcoded pane ids to what `herdr-plugin.toml` actually
+/// declares: herdr rejects duplicate pane ids even across disjoint platforms, which is why
+/// there are two `[[panes]]` entries (`sidebar` for macos/linux, `sidebar-windows` for
+/// windows) instead of one shared id. If the manifest's ids or platform lists ever drift from
+/// this, the binary would ask herdr to open a pane entrypoint that doesn't exist for its
+/// platform.
+#[test]
+fn manifest_pins_the_sidebar_pane_ids_and_platforms() {
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("herdr-plugin.toml");
+    let text = fs::read_to_string(&manifest_path).unwrap();
+    let table: toml::Table = text.parse().unwrap();
+    let panes = table.get("panes").and_then(toml::Value::as_array).expect("[[panes]] array");
+
+    let platforms_of = |id: &str| -> Vec<String> {
+        let pane = panes
+            .iter()
+            .find(|p| p.get("id").and_then(toml::Value::as_str) == Some(id))
+            .unwrap_or_else(|| panic!("no [[panes]] entry with id = \"{id}\""));
+        pane.get("platforms")
+            .and_then(toml::Value::as_array)
+            .unwrap_or_else(|| panic!("pane \"{id}\" has no platforms array"))
+            .iter()
+            .map(|v| v.as_str().expect("platform entry is a string").to_string())
+            .collect()
+    };
+
+    assert_eq!(platforms_of("sidebar"), vec!["macos", "linux"]);
+    assert_eq!(platforms_of("sidebar-windows"), vec!["windows"]);
 }
