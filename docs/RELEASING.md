@@ -39,7 +39,7 @@ Pick the new version with semver: a behavior change or new feature is a minor bu
 
    ```bash
    gh run watch                  # the release.yml run for the tag
-   gh release view vX.Y.Z        # four <target>.tar.gz + .sha256 sidecars
+   gh release view vX.Y.Z        # four <target>.tar.gz + the Windows .zip, each with a .sha256 sidecar
    ```
 
 ## What the tag triggers
@@ -48,9 +48,9 @@ Pick the new version with semver: a behavior change or new feature is a minor bu
 
 - creates the Release for the tag if absent (`gh release create --verify-tag --generate-notes`);
 - builds `herdr-reviewr` for `aarch64-apple-darwin`, `x86_64-apple-darwin`,
-  `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl` (statically linked, so the
-  binary runs on any glibc);
-- uploads each as `herdr-reviewr-<target>.tar.gz` with a `.sha256` sidecar.
+  `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` (statically linked, so the
+  binary runs on any glibc), and `x86_64-pc-windows-msvc`;
+- uploads each as `herdr-reviewr-<target>.tar.gz` (`.zip` on Windows) with a `.sha256` sidecar.
 
 The toolchain is pinned by `rust-toolchain.toml`, so CI and local builds match.
 

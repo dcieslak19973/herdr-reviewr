@@ -1,6 +1,6 @@
 id = "dcieslak19973.reviewr"
 name = "reviewr"
-version = "0.13.1"
+version = "0.14.0"
 # 0.7.5 is the earliest herdr verified to honor item-level `platforms` filters (see
 # docs/superpowers/specs/2026-07-30-windows-support-design.md); an older herdr refuses here
 # with a version message instead of half-installing a manifest it may misread (e.g. running
