@@ -104,6 +104,11 @@ fn login_hint(forge: crate::git::Forge, host: &str) -> String {
         crate::git::Forge::AzureDevOps => {
             "`az login` (or `az devops login` with a PAT)".to_string()
         }
+        // Bitbucket Data Center has no CLI to sign in with; a bearer token or a stored git
+        // credential authenticates the read directly (`crate::bitbucket`).
+        crate::git::Forge::Bitbucket => {
+            format!("`export BITBUCKET_TOKEN=<token>` (or add a git credential for {host})")
+        }
     }
 }
 
@@ -112,7 +117,9 @@ fn login_hint(forge: crate::git::Forge, host: &str) -> String {
 fn extension_hint(forge: crate::git::Forge) -> Option<&'static str> {
     match forge {
         crate::git::Forge::AzureDevOps => Some("`az extension add --name azure-devops`"),
-        crate::git::Forge::GitHub | crate::git::Forge::GitLab => None,
+        crate::git::Forge::GitHub | crate::git::Forge::GitLab | crate::git::Forge::Bitbucket => {
+            None
+        }
     }
 }
 
@@ -542,6 +549,9 @@ fn fetch_inner(
         }
         crate::git::Forge::AzureDevOps => {
             return Ok(crate::azure_devops::fetch(repo, input, repository, cancelled));
+        }
+        crate::git::Forge::Bitbucket => {
+            return Ok(crate::bitbucket::fetch(repo, input, repository, cancelled));
         }
         crate::git::Forge::GitHub => {}
     }
@@ -1156,7 +1166,7 @@ pub fn relative_age(created_at: &str, now: SystemTime) -> String {
 /// deviation, so a malformed value yields an empty age rather than a wrong one.
 // The civil-from-days algorithm reads naturally with the conventional short field names.
 #[allow(clippy::many_single_char_names)]
-fn parse_iso(s: &str) -> Option<i64> {
+pub(crate) fn parse_iso(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 20
         || b[4] != b'-'

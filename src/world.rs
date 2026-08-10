@@ -397,7 +397,10 @@ mod tests {
     fn only_an_absolute_cwd_can_name_a_worktree() {
         // A blank or relative cwd would resolve against reviewr's own cwd (the reviewed
         // worktree), so membership must reject it before any git call (specs/herdr-host.md).
-        assert_eq!(worktree_cwd(Some("/abs/path")), Some("/abs/path"));
+        // An absolute path is spelled per platform: a leading `/` names no absolute path on
+        // Windows, where a drive-qualified path is the absolute form.
+        let abs = if cfg!(windows) { "C:/abs/path" } else { "/abs/path" };
+        assert_eq!(worktree_cwd(Some(abs)), Some(abs));
         assert_eq!(worktree_cwd(Some("relative/path")), None);
         assert_eq!(worktree_cwd(Some("")), None);
         assert_eq!(worktree_cwd(None), None);

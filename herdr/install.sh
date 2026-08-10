@@ -10,7 +10,7 @@
 set -euo pipefail
 
 NAME="herdr-reviewr"
-REPO="persiyanov/herdr-reviewr"
+REPO="dcieslak19973/herdr-reviewr"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="$ROOT/bin"
@@ -85,7 +85,12 @@ link_binary() {
     echo "$NAME: warning: could not link $1/$NAME" >&2
   fi
 }
-link_binary "$HOME/.local/state/herdr/plugins/persiyanov.reviewr/bin"
+link_binary "$HOME/.local/state/herdr/plugins/dcieslak19973.reviewr/bin"
 if [ -d "$HOME/.local/bin" ]; then
   link_binary "$HOME/.local/bin"
 fi
+
+# Post-install next steps: printed to stdout on success only, never affects exit status.
+echo "$NAME: next steps"
+echo "  1) install the agent skill:  npx skills add dcieslak19973/herdr-reviewr --skill reviewr-comments -g"
+echo "     (or: $NAME skill-install · or: herdr plugin action invoke skill-install --plugin dcieslak19973.reviewr)"

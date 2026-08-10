@@ -53,12 +53,24 @@ fn counted_comments(count: usize) -> String {
 
 /// A clipboard tool and the args that make it read stdin into the system clipboard. Tried in
 /// order — the first one present on `PATH` wins. macOS ships `pbcopy`; Linux needs one of these
-/// installed (Wayland `wl-copy`, or X11 `xclip`/`xsel`). OSC 52 and Windows are roadmap.
+/// installed (Wayland `wl-copy`, or X11 `xclip`/`xsel`); Windows ships `clip`. OSC 52 is
+/// roadmap.
+#[cfg(not(windows))]
 const CLIPBOARD_TOOLS: &[(&str, &[&str])] = &[
     ("pbcopy", &[]),
     ("wl-copy", &[]),
     ("xclip", &["-selection", "clipboard"]),
     ("xsel", &["--clipboard", "--input"]),
+];
+
+/// Windows twin of the list above: `clip` ships with every Windows install.
+#[cfg(windows)]
+const CLIPBOARD_TOOLS: &[(&str, &[&str])] = &[
+    ("pbcopy", &[]),
+    ("wl-copy", &[]),
+    ("xclip", &["-selection", "clipboard"]),
+    ("xsel", &["--clipboard", "--input"]),
+    ("clip", &[]),
 ];
 
 /// The system clipboard, via the first available platform clipboard tool.

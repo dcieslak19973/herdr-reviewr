@@ -209,7 +209,7 @@ pub fn plugin_config_dir() -> Option<String> {
 /// visible pane to the defaults instead of holding the blank grid issue #4 fixed.
 pub fn plugin_config_dir_with(on_slow: impl FnOnce()) -> Option<String> {
     let rx =
-        herdr_on_thread(vec!["plugin".into(), "config-dir".into(), "persiyanov.reviewr".into()]);
+        herdr_on_thread(vec!["plugin".into(), "config-dir".into(), "dcieslak19973.reviewr".into()]);
     let answer = if let Ok(answer) = rx.recv_timeout(SIGNAL_DELAY) {
         answer
     } else {

@@ -10,7 +10,10 @@
 
 pub mod app;
 pub mod azure_devops;
+pub mod bitbucket;
 pub mod browser;
+pub mod cli;
+pub mod comments;
 pub mod config;
 pub mod diff;
 pub mod export;
@@ -27,6 +30,7 @@ pub mod markdown;
 pub mod model;
 pub mod proc;
 pub mod search;
+pub mod sidebar;
 pub mod theme;
 pub mod turn;
 pub mod ui;

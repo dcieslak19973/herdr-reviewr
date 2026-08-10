@@ -66,7 +66,7 @@ impl Config {
     }
 }
 
-const PLUGIN_CONFIG_KEYS: [&str; 10] = [
+const PLUGIN_CONFIG_KEYS: [&str; 12] = [
     "theme",
     "default_scope",
     "navigator_position",
@@ -76,6 +76,8 @@ const PLUGIN_CONFIG_KEYS: [&str; 10] = [
     "github_host",
     "gitlab_host",
     "azure_devops_host",
+    "bitbucket_host",
+    "comment_sync",
     "keybindings",
 ];
 
@@ -153,6 +155,27 @@ impl ToggleDirection {
     }
 }
 
+/// When a reviewer comment persists to the shared on-disk store, making it visible to the
+/// agent. Agent-authored comments are always store-resident regardless of this setting.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommentSync {
+    /// Persist a reviewer comment the moment it is created or edited.
+    #[default]
+    Immediate,
+    /// Persist reviewer comments only when they are sent to the agent.
+    OnSend,
+}
+
+impl CommentSync {
+    /// The config-file spelling used in normalized output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Immediate => "immediate",
+            Self::OnSend => "on-send",
+        }
+    }
+}
+
 /// One validated snapshot of `config.toml` in the resolved config directory.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginConfig {
@@ -165,6 +188,8 @@ pub struct PluginConfig {
     github_host: Option<String>,
     gitlab_host: Option<String>,
     azure_devops_host: Option<String>,
+    bitbucket_host: Option<String>,
+    comment_sync: CommentSync,
     keymap: crate::keymap::Keymap,
 }
 
@@ -180,6 +205,8 @@ impl Default for PluginConfig {
             github_host: None,
             gitlab_host: None,
             azure_devops_host: None,
+            bitbucket_host: None,
+            comment_sync: CommentSync::default(),
             keymap: crate::keymap::Keymap::default(),
         }
     }
@@ -224,12 +251,21 @@ impl PluginConfig {
         self.azure_devops_host.as_deref()
     }
 
+    pub fn bitbucket_host(&self) -> Option<&str> {
+        self.bitbucket_host.as_deref()
+    }
+
+    pub fn comment_sync(&self) -> CommentSync {
+        self.comment_sync
+    }
+
     /// The forge host set one fetch resolves remotes against (`specs/forge-host.md`).
     pub fn forge_hosts(&self) -> crate::git::ForgeHosts<'_> {
         crate::git::ForgeHosts {
             github: self.github_host(),
             gitlab: self.gitlab_host(),
             azure_devops: self.azure_devops_host(),
+            bitbucket: self.bitbucket_host(),
         }
     }
 
@@ -259,6 +295,8 @@ impl PluginConfig {
             "github_host": self.github_host,
             "gitlab_host": self.gitlab_host,
             "azure_devops_host": self.azure_devops_host,
+            "bitbucket_host": self.bitbucket_host,
+            "comment_sync": self.comment_sync.as_str(),
             "keybindings": keybindings,
         })
     }
@@ -425,6 +463,17 @@ fn parse_plugin_config(path: &Path) -> Result<PluginConfig, PluginConfigError> {
     if let Some(value) = table.get("azure_devops_host") {
         config.azure_devops_host = Some(parse_forge_host(path, "azure_devops_host", value)?);
     }
+    if let Some(value) = table.get("bitbucket_host") {
+        config.bitbucket_host = Some(parse_forge_host(path, "bitbucket_host", value)?);
+    }
+    if let Some(value) = table.get("comment_sync") {
+        config.comment_sync =
+            match string_value(path, "comment_sync", value, "one of immediate, on-send")? {
+                "immediate" => CommentSync::Immediate,
+                "on-send" => CommentSync::OnSend,
+                _ => return Err(value_error(path, "comment_sync", "one of immediate, on-send")),
+            };
+    }
     // A hostname is recognized by at most one forge; a cross-key collision is an invalid
     // value under CFG-WHOLE-FILE (`specs/config.md`). Scanned as a set so a new key joins by
     // being listed, in the parse order above: the later key's error names the earlier owner.
@@ -432,6 +481,7 @@ fn parse_plugin_config(path: &Path) -> Result<PluginConfig, PluginConfigError> {
         ("github_host", &config.github_host),
         ("gitlab_host", &config.gitlab_host),
         ("azure_devops_host", &config.azure_devops_host),
+        ("bitbucket_host", &config.bitbucket_host),
     ];
     for (index, (key, value)) in host_keys.iter().enumerate() {
         let Some(value) = value else { continue };

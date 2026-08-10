@@ -1,47 +1,138 @@
-id = "persiyanov.reviewr"
+id = "dcieslak19973.reviewr"
 name = "reviewr"
 version = "0.30.1"
 # Turn tracking resolves each agent's `cwd` from `herdr agent list` to decide worktree
 # membership, and `cwd` is only verified present from 0.7.5 (docs/herdr-api-notes.md). On an
-# older herdr every agent would parse with no `cwd`, and `last turn` would never track.
+# older herdr every agent would parse with no `cwd`, and `last turn` would never track. 0.7.5
+# is also the earliest herdr verified to honor item-level `platforms` filters, which the
+# Windows twins below rely on; an older herdr refuses here with a version message instead of
+# half-installing a manifest it may misread (e.g. running both [[build]] twins on unix).
 min_herdr_version = "0.7.5"
-platforms = ["macos", "linux"]
+platforms = ["macos", "linux", "windows"]
 description = "Review agent-written diffs beside the chat and add line comments to the agent input."
 
 # On `herdr plugin install`, download the prebuilt `herdr-reviewr` binary for this platform from
 # the matching GitHub Release into $HERDR_PLUGIN_ROOT/bin (no Rust toolchain needed). Skipped by
 # `herdr plugin link` — for a local checkout, build it yourself with `cargo install --path .`.
+#
+# Windows notes: commands are argv arrays herdr spawns directly — no shell — so each entry has a
+# unix item and a Windows twin gated by item-level `platforms`. herdr rejects duplicate
+# pane/action ids even across disjoint platforms, hence the `-windows` id suffixes; on Windows,
+# bind THOSE action ids. The PowerShell one-liners expand $env:HERDR_PLUGIN_ROOT themselves and
+# strip the `\\?\` verbatim prefix herdr reports on Windows before invoking bin\herdr-reviewr.exe
+# by absolute path.
 [[build]]
+platforms = ["macos", "linux"]
 command = ["bash", "herdr/install.sh"]
+
+[[build]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "herdr/install.ps1"]
 
 # The plugin pane runs the downloaded binary by absolute path under the plugin root, since the
 # pane's cwd is the repo under review (not the plugin root) and the binary isn't on PATH. The
 # toggle action's placement is configurable (default: right split); see herdr/pane.sh.
 [[panes]]
 id = "pane"
+platforms = ["macos", "linux"]
 title = "reviewr"
 placement = "split"
 command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-reviewr\""]
 
+[[panes]]
+id = "pane-windows"
+platforms = ["windows"]
+title = "reviewr"
+placement = "split"
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe''',
+]
+
+# Install the bundled agent skill (`skills/reviewr-comments`). No upstream shell script backs
+# this; the action runs the binary's own `skill-install` subcommand directly.
+[[actions]]
+id = "skill-install"
+platforms = ["macos", "linux"]
+title = "reviewr: install agent skill"
+contexts = ["pane", "workspace"]
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/bin/herdr-reviewr\" skill-install"]
+
+[[actions]]
+id = "skill-install-windows"
+platforms = ["windows"]
+title = "reviewr: install agent skill"
+contexts = ["pane", "workspace"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe skill-install''',
+]
+
+# Pane orchestration: unix drives the maintained herdr/pane.sh; Windows (no bash) drives the
+# binary's own `sidebar <mode>` subcommand, which mirrors the same toggle/open/close/auto-open
+# contract.
 [[actions]]
 id = "toggle"
+platforms = ["macos", "linux"]
 title = "reviewr: toggle pane"
 contexts = ["pane", "workspace"]
 command = ["bash", "herdr/pane.sh", "toggle"]
 
 [[actions]]
+id = "toggle-windows"
+platforms = ["windows"]
+title = "reviewr: toggle pane"
+contexts = ["pane", "workspace"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe sidebar toggle''',
+]
+
+[[actions]]
 id = "open"
+platforms = ["macos", "linux"]
 title = "reviewr: open pane"
 contexts = ["pane", "workspace"]
 command = ["bash", "herdr/pane.sh", "open"]
 
 [[actions]]
+id = "open-windows"
+platforms = ["windows"]
+title = "reviewr: open pane"
+contexts = ["pane", "workspace"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe sidebar open''',
+]
+
+[[actions]]
 id = "close"
+platforms = ["macos", "linux"]
 title = "reviewr: close pane"
 contexts = ["pane", "workspace"]
 command = ["bash", "herdr/pane.sh", "close"]
 
-# Auto-open a reviewr pane for a freshly created worktree (gated by auto_open; see herdr/pane.sh).
+[[actions]]
+id = "close-windows"
+platforms = ["windows"]
+title = "reviewr: close pane"
+contexts = ["pane", "workspace"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe sidebar close''',
+]
+
+# Auto-open a reviewr pane for a freshly created worktree (gated by auto_open). Events carry no
+# ids, so the twins need no suffix.
 [[events]]
 on = "worktree.created"
+platforms = ["macos", "linux"]
 command = ["bash", "herdr/pane.sh", "auto-open"]
+
+[[events]]
+on = "worktree.created"
+platforms = ["windows"]
+command = [
+  "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+  '''$r = $env:HERDR_PLUGIN_ROOT; if ($r -and $r.StartsWith('\\?\')) { $r = $r.Substring(4) }; $exe = Join-Path $r 'bin\herdr-reviewr.exe'; & $exe sidebar auto-open''',
+]

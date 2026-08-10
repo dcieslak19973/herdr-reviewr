@@ -100,6 +100,9 @@ pub enum Forge {
     GitHub,
     GitLab,
     AzureDevOps,
+    /// Bitbucket Data Center, reached through a configured self-hosted host — Bitbucket
+    /// Cloud (`bitbucket.org`) is not supported (`specs/forge-host.md`).
+    Bitbucket,
 }
 
 /// The per-forge display vocabulary — the CLI, noun, and reference table in
@@ -111,13 +114,14 @@ impl Forge {
             Self::GitHub => "GitHub",
             Self::GitLab => "GitLab",
             Self::AzureDevOps => "Azure DevOps",
+            Self::Bitbucket => "Bitbucket",
         }
     }
 
     /// The forge's full noun: the word its users say (`specs/forge-providers.md`).
     pub fn noun(self) -> &'static str {
         match self {
-            Self::GitHub | Self::AzureDevOps => "pull request",
+            Self::GitHub | Self::AzureDevOps | Self::Bitbucket => "pull request",
             Self::GitLab => "merge request",
         }
     }
@@ -125,7 +129,7 @@ impl Forge {
     /// The forge's noun abbreviation: `PR` on GitHub, `MR` on GitLab.
     pub fn abbr(self) -> &'static str {
         match self {
-            Self::GitHub | Self::AzureDevOps => "PR",
+            Self::GitHub | Self::AzureDevOps | Self::Bitbucket => "PR",
             Self::GitLab => "MR",
         }
     }
@@ -133,7 +137,7 @@ impl Forge {
     /// The reference sigil before a number: `#226` on GitHub, `!42` on GitLab.
     pub fn sigil(self) -> char {
         match self {
-            Self::GitHub | Self::AzureDevOps => '#',
+            Self::GitHub | Self::AzureDevOps | Self::Bitbucket => '#',
             Self::GitLab => '!',
         }
     }
@@ -144,6 +148,8 @@ impl Forge {
             Self::GitHub => "gh",
             Self::GitLab => "glab",
             Self::AzureDevOps => "az",
+            // Bitbucket Data Center has no dedicated CLI; it is reached through `curl`.
+            Self::Bitbucket => "curl",
         }
     }
 }
@@ -155,6 +161,7 @@ pub struct ForgeHosts<'a> {
     pub github: Option<&'a str>,
     pub gitlab: Option<&'a str>,
     pub azure_devops: Option<&'a str>,
+    pub bitbucket: Option<&'a str>,
 }
 
 /// A canonical forge repository target: the forge, its hostname, and the repository path.
@@ -184,6 +191,8 @@ impl RepoTarget {
             Forge::GitLab => segments.len() >= 2 && !segments.contains(&"-"),
             // Always `[organization, project, repository]`, shaped by `ado_canonicalize`.
             Forge::AzureDevOps => segments.len() == 3,
+            // `[project key, repo slug]`, the `scm` marker already stripped by `classify_remote`.
+            Forge::Bitbucket => segments.len() == 2,
         };
         // Azure DevOps project and repository names admit spaces and non-ASCII characters,
         // which arrive percent-encoded and are decoded by `ado_canonicalize`.
@@ -297,11 +306,29 @@ fn classify_remote(url: &str, hosts: &ForgeHosts<'_>) -> RepositoryIdentity {
             let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
             RepoTarget::with_path(forge, &host, &segments)
         }),
+        // Bitbucket DC's HTTPS clone URLs carry a `/scm/` marker ahead of the project/repo
+        // path (`https://host/scm/PROJ/repo.git`); its SSH URLs carry the path directly. A
+        // missing marker on an HTTPS remote is malformed, not a deeper path.
+        Forge::Bitbucket => bitbucket_segments(transport, &segments)
+            .and_then(|segments| RepoTarget::with_path(forge, &host, &segments)),
         _ => RepoTarget::with_path(forge, &host, &segments),
     };
     match target {
         Some(target) => RepositoryIdentity::Repository(target),
         None => RepositoryIdentity::Malformed(host),
+    }
+}
+
+/// Bitbucket DC's repository path, transport-adjusted: an HTTPS/`git` remote strips the
+/// leading `scm` marker segment (`None` when absent — a browse-link path with no marker is
+/// malformed, not a deeper path); an SSH remote carries the path directly.
+fn bitbucket_segments<'a>(transport: RemoteTransport, segments: &[&'a str]) -> Option<Vec<&'a str>> {
+    if transport == RemoteTransport::Ssh {
+        return Some(segments.to_vec());
+    }
+    match segments.split_first() {
+        Some((&"scm", rest)) => Some(rest.to_vec()),
+        _ => None,
     }
 }
 
@@ -323,6 +350,9 @@ pub(crate) fn forge_for_host(host: &str, hosts: &ForgeHosts<'_>) -> Option<Forge
         || hosts.azure_devops == Some(host)
     {
         return Some(Forge::AzureDevOps);
+    }
+    if hosts.bitbucket == Some(host) {
+        return Some(Forge::Bitbucket);
     }
     None
 }
@@ -1347,7 +1377,8 @@ mod tests {
         parse_name_status, parse_numstat,
     };
 
-    const NONE: ForgeHosts<'_> = ForgeHosts { github: None, gitlab: None, azure_devops: None };
+    const NONE: ForgeHosts<'_> =
+        ForgeHosts { github: None, gitlab: None, azure_devops: None, bitbucket: None };
 
     fn github(host: &str) -> ForgeHosts<'_> {
         ForgeHosts { github: Some(host), ..NONE }
@@ -1359,6 +1390,10 @@ mod tests {
 
     fn azure_devops(host: &str) -> ForgeHosts<'_> {
         ForgeHosts { azure_devops: Some(host), ..NONE }
+    }
+
+    fn bitbucket(host: &str) -> ForgeHosts<'_> {
+        ForgeHosts { bitbucket: Some(host), ..NONE }
     }
 
     #[test]
@@ -1377,8 +1412,16 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
-        let canonical = std::fs::canonicalize(repo.path()).unwrap();
-        assert_eq!(worktree_of(repo.path()), Worktree::Root(canonical));
+        // `worktree_of` returns git's path spelling (forward slashes on Windows), while
+        // `canonicalize` returns the platform's canonical form (a `\\?\` verbatim prefix on
+        // Windows). Canonicalize both sides so the comparison is representation-agnostic.
+        let Worktree::Root(root) = worktree_of(repo.path()) else {
+            panic!("expected the initialized repo to resolve to a worktree root");
+        };
+        assert_eq!(
+            std::fs::canonicalize(&root).unwrap(),
+            std::fs::canonicalize(repo.path()).unwrap()
+        );
     }
 
     #[test]
@@ -1467,6 +1510,46 @@ mod tests {
         assert_eq!(
             classify_remote("https://gitlab.com/owner", &NONE),
             RepositoryIdentity::Malformed("gitlab.com".to_string())
+        );
+    }
+
+    #[test]
+    fn repository_identity_parses_bitbucket_dc_remote_forms() {
+        let repo = |host: &str, project: &str, slug: &str| {
+            RepositoryIdentity::Repository(
+                RepoTarget::with_path(Forge::Bitbucket, host, &[project, slug]).unwrap(),
+            )
+        };
+        let h = bitbucket("bitbucket.corp.com");
+        // HTTPS clone URLs carry the `/scm/` marker ahead of the project/repo path.
+        assert_eq!(
+            classify_remote("https://bitbucket.corp.com/scm/PROJ/repo.git", &h),
+            repo("bitbucket.corp.com", "PROJ", "repo")
+        );
+        // The `ssh://` scheme form (optionally with a port) carries the path directly.
+        assert_eq!(
+            classify_remote("ssh://git@bitbucket.corp.com:7999/PROJ/repo.git", &h),
+            repo("bitbucket.corp.com", "PROJ", "repo")
+        );
+        assert_eq!(
+            classify_remote("ssh://git@bitbucket.corp.com/PROJ/repo.git", &h),
+            repo("bitbucket.corp.com", "PROJ", "repo")
+        );
+        // An HTTPS path missing the `/scm/` marker is malformed, not a deeper path.
+        assert_eq!(
+            classify_remote("https://bitbucket.corp.com/PROJ/repo.git", &h),
+            RepositoryIdentity::Malformed("bitbucket.corp.com".to_string())
+        );
+        // Bitbucket Cloud (`bitbucket.org`) is never recognized — only Data Center is
+        // supported, and only through a configured self-hosted host.
+        assert_eq!(
+            classify_remote("git@bitbucket.org:owner/repo.git", &h),
+            RepositoryIdentity::Unsupported("bitbucket.org".to_string())
+        );
+        // An unconfigured host is unsupported even with the right shape.
+        assert_eq!(
+            classify_remote("https://bitbucket.corp.com/scm/PROJ/repo.git", &NONE),
+            RepositoryIdentity::Unsupported("bitbucket.corp.com".to_string())
         );
     }
 
