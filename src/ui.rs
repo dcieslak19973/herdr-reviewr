@@ -304,7 +304,9 @@ pub fn diff_row_heights(app: &App, area: Rect) -> Vec<usize> {
                 .iter()
                 .filter(|&&ci| Some(ci) != editing && user_card_visible(app, ci))
                 .filter_map(|&ci| app.store.get(ci).map(|c| (ci, c)))
-                .map(|(ci, c)| comment_card_lines(c, width, p, false, app.comment_resolved(ci)).len())
+                .map(|(ci, c)| {
+                    comment_card_lines(c, width, p, false, app.comment_resolved(ci)).len()
+                })
                 .sum();
             let agent_card: usize = agent_cards[i]
                 .iter()
@@ -1628,9 +1630,10 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
         }
         A::Quit => (hint(K::Quit), "quit"),
         A::ResolveComment => (hint(K::ResolveComment), "resolve"),
-        A::HideResolved => {
-            (hint(K::HideResolved), if app.hide_resolved { "show resolved" } else { "hide resolved" })
-        }
+        A::HideResolved => (
+            hint(K::HideResolved),
+            if app.hide_resolved { "show resolved" } else { "hide resolved" },
+        ),
     };
     (k, l.into())
 }
@@ -1940,7 +1943,9 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
             let resolved = app.comment_resolved(i);
             let loc = Span::styled(
                 format!(" {}", c.location()),
-                Style::default().fg(if resolved { p.overlay1 } else { p.mauve }).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(if resolved { p.overlay1 } else { p.mauve })
+                    .add_modifier(Modifier::BOLD),
             );
             let body_style = if resolved { Style::default().fg(p.overlay1) } else { text_style(p) };
             let mut spans = vec![loc, Span::styled(format!("  {}", c.text), body_style)];

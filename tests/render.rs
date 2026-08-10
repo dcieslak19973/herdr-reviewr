@@ -208,7 +208,7 @@ const MAUVE: ratatui::style::Color = ratatui::style::Color::Rgb(0xcb, 0xa6, 0xf7
 
 #[test]
 fn an_agent_comment_renders_as_a_distinct_card_with_a_chip() {
-    use herdr_reviewr::comments::{Author, StoredComment, Status};
+    use herdr_reviewr::comments::{Author, Status, StoredComment};
     use herdr_reviewr::model::{Comment, Side};
 
     let r = Repo::init();

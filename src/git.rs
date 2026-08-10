@@ -185,14 +185,14 @@ impl RepoTarget {
     pub(crate) fn with_path(forge: Forge, host: &str, segments: &[&str]) -> Option<Self> {
         let host = host.to_ascii_lowercase();
         let valid_len = match forge {
-            Forge::GitHub => segments.len() == 2,
+            // GitHub is `[owner, name]`; Bitbucket is `[project key, repo slug]` with the `scm`
+            // marker already stripped by `classify_remote` — both are exactly two segments.
+            Forge::GitHub | Forge::Bitbucket => segments.len() == 2,
             // GitLab reserves `-` as the separator between a project path and the rest of a web
             // URL, so a pasted browse link is a malformed remote, not a deep namespace.
             Forge::GitLab => segments.len() >= 2 && !segments.contains(&"-"),
             // Always `[organization, project, repository]`, shaped by `ado_canonicalize`.
             Forge::AzureDevOps => segments.len() == 3,
-            // `[project key, repo slug]`, the `scm` marker already stripped by `classify_remote`.
-            Forge::Bitbucket => segments.len() == 2,
         };
         // Azure DevOps project and repository names admit spaces and non-ASCII characters,
         // which arrive percent-encoded and are decoded by `ado_canonicalize`.
@@ -322,7 +322,10 @@ fn classify_remote(url: &str, hosts: &ForgeHosts<'_>) -> RepositoryIdentity {
 /// Bitbucket DC's repository path, transport-adjusted: an HTTPS/`git` remote strips the
 /// leading `scm` marker segment (`None` when absent — a browse-link path with no marker is
 /// malformed, not a deeper path); an SSH remote carries the path directly.
-fn bitbucket_segments<'a>(transport: RemoteTransport, segments: &[&'a str]) -> Option<Vec<&'a str>> {
+fn bitbucket_segments<'a>(
+    transport: RemoteTransport,
+    segments: &[&'a str],
+) -> Option<Vec<&'a str>> {
     if transport == RemoteTransport::Ssh {
         return Some(segments.to_vec());
     }

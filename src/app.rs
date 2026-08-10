@@ -2992,7 +2992,9 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                self.store.iter().any(|c| c.file == file && self.comment_in_view(c) && line_in(c, row))
+                self.store
+                    .iter()
+                    .any(|c| c.file == file && self.comment_in_view(c) && line_in(c, row))
                     || self.agent_comments.iter().any(|sc| {
                         sc.comment.file == file
                             && self.comment_in_view(&sc.comment)
@@ -4078,9 +4080,12 @@ impl App {
                 }
             }
         }
-        self.status =
-            if next == comments::Status::Resolved { "comment resolved" } else { "comment reopened" }
-                .to_string();
+        self.status = if next == comments::Status::Resolved {
+            "comment resolved"
+        } else {
+            "comment reopened"
+        }
+        .to_string();
     }
 
     fn toggle_agent_resolved(&mut self, index: usize) {
@@ -4100,9 +4105,12 @@ impl App {
             }
             Err(e) => logln!("comment resolve failed: {e}"),
         }
-        self.status =
-            if next == comments::Status::Resolved { "comment resolved" } else { "comment reopened" }
-                .to_string();
+        self.status = if next == comments::Status::Resolved {
+            "comment resolved"
+        } else {
+            "comment reopened"
+        }
+        .to_string();
     }
 
     /// `H`: hide (or show) every resolved comment's inline card, any author.

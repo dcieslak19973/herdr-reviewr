@@ -290,16 +290,24 @@ fn fetch_comments(ctx: &Ctx<'_>, id: u64) -> Result<(Vec<Comment>, bool), Bitbuc
 /// cached globally — so a rotated token takes effect on the next poll without a restart. The
 /// credential helper is only spawned when the env var is absent/empty, so a poll with
 /// `BITBUCKET_TOKEN` set never pays for a `git credential fill` subprocess.
-fn resolve_token(repo: &Path, host: &str, cancelled: &AtomicBool) -> Result<String, BitbucketError> {
+fn resolve_token(
+    repo: &Path,
+    host: &str,
+    cancelled: &AtomicBool,
+) -> Result<String, BitbucketError> {
     let env = std::env::var("BITBUCKET_TOKEN").ok();
-    token_from(env, || credential_password(repo, host, cancelled)).map_err(|()| BitbucketError::NotAuthed)
+    token_from(env, || credential_password(repo, host, cancelled))
+        .map_err(|()| BitbucketError::NotAuthed)
 }
 
 /// The pure auth decision, independent of how `env`/`credential_password` were obtained: a
 /// non-empty env var wins, then a non-empty credential-helper password, else no token.
 /// `credential_password` is only invoked when `env` is absent/empty, so callers can pass a
 /// closure that spawns a subprocess without paying for it on the common env-var-set path.
-fn token_from(env: Option<String>, credential_password: impl FnOnce() -> Option<String>) -> Result<String, ()> {
+fn token_from(
+    env: Option<String>,
+    credential_password: impl FnOnce() -> Option<String>,
+) -> Result<String, ()> {
     if let Some(t) = env.filter(|s| !s.is_empty()) {
         return Ok(t);
     }
@@ -338,7 +346,12 @@ fn credential_password(repo: &Path, host: &str, cancelled: &AtomicBool) -> Optio
 
 /// GET `url` with the bearer token via a stdin curl config, so the token is invisible to
 /// `ps`/`/proc`. `--fail` maps HTTP errors to exit 22 with the status line on stderr.
-fn curl_get(repo: &Path, token: &str, url: &str, cancelled: &AtomicBool) -> Result<Value, BitbucketError> {
+fn curl_get(
+    repo: &Path,
+    token: &str,
+    url: &str,
+    cancelled: &AtomicBool,
+) -> Result<Value, BitbucketError> {
     let config = format!("header = \"Authorization: Bearer {token}\"\n");
     let out = run_tool(
         "curl",
@@ -532,12 +545,11 @@ fn epoch_ms_to_iso(ms: i64) -> String {
 /// heuristics (`[bot]`/`-bot` suffix) apply, plus a `_bot` suffix — Bitbucket's own
 /// convention for scripted accounts.
 fn author_is_bot(author: &Value) -> bool {
-    match author["type"].as_str() {
-        Some(t) => t == "SERVICE",
-        None => {
-            let name = author["name"].as_str().unwrap_or("");
-            crate::forge::is_named_bot(name) || name.ends_with("_bot")
-        }
+    if let Some(kind) = author["type"].as_str() {
+        kind == "SERVICE"
+    } else {
+        let name = author["name"].as_str().unwrap_or("");
+        crate::forge::is_named_bot(name) || name.ends_with("_bot")
     }
 }
 
@@ -689,7 +701,9 @@ mod tests {
         );
         // canMerge:false with no vetoes (e.g. still computing) is not actionable → Clean.
         assert_eq!(
-            derive_merge(&serde_json::json!({"canMerge": false, "conflicted": false, "vetoes": []})),
+            derive_merge(
+                &serde_json::json!({"canMerge": false, "conflicted": false, "vetoes": []})
+            ),
             Merge::Clean
         );
     }
@@ -826,7 +840,9 @@ mod tests {
 
         let mut forked = detail.clone();
         forked["fromRef"]["repository"]["project"]["key"] = serde_json::json!("OTHER");
-        assert!(build_snapshot(&forked, Merge::Clean, vec![], vec![], Sync::InSync, false).head_is_fork);
+        assert!(
+            build_snapshot(&forked, Merge::Clean, vec![], vec![], Sync::InSync, false).head_is_fork
+        );
 
         // Absent fields default rather than fail — a mid-rollout API response degrades soft.
         let bare = serde_json::json!({"id": 7});
@@ -879,7 +895,9 @@ mod tests {
             BitbucketError::Other(message) if message == "HTTP 500"
         ));
         assert!(matches!(classify(SpawnFail::Cancelled), BitbucketError::Other(_)));
-        assert!(matches!(classify(SpawnFail::Io("boom".to_string())), BitbucketError::Other(message) if message == "boom"));
+        assert!(
+            matches!(classify(SpawnFail::Io("boom".to_string())), BitbucketError::Other(message) if message == "boom")
+        );
     }
 
     #[test]
