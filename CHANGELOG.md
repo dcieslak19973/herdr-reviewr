@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-08-09
+
 This is the `dcieslak19973/herdr-reviewr` fork, synced to upstream v0.30.1 with the
 fork's distinct features re-applied on top of upstream's architecture:
 
