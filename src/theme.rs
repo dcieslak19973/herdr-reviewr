@@ -43,6 +43,9 @@ pub struct Theme {
 /// The resolved colors every UI element paints — one source for chrome and diff fills.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Palette {
+    /// The theme's background anchor. Nothing paints it directly — the terminal supplies the
+    /// real background — but the modal scrim blends receding cells toward it.
+    pub base: Color,
     pub surface0: Color,
     pub surface1: Color,
     pub surface2: Color,
@@ -60,6 +63,9 @@ pub struct Palette {
     pub ins_bg: Color,
     pub emph_del_bg: Color,
     pub emph_ins_bg: Color,
+    /// The search match highlight: a warm fill behind a matched substring, legible over a
+    /// plain row, a syntax-colored row, and the preview's banded hit line alike.
+    pub match_hl: Color,
 }
 
 impl Palette {
@@ -68,6 +74,25 @@ impl Palette {
     /// ("Strongest", not "brightest": light themes step surfaces toward black, not white.)
     pub fn cursor_bg(&self, focused: bool) -> Color {
         if focused { self.surface2 } else { self.surface1 }
+    }
+
+    /// Lift a painted color onto a selection fill. The dim role (`overlay0`) sits one surface
+    /// step above the fill and all but vanishes on it, so it rises to `subtext0` and the
+    /// secondary parts of a selected row stay readable (`specs/theme.md`). Every other color
+    /// already reads there and passes through. Each theme names both ends, so the mapping means
+    /// the same thing in all of them.
+    pub fn on_fill(&self, color: Color) -> Color {
+        if color == self.overlay0 { self.subtext0 } else { color }
+    }
+
+    /// Recede a painted color behind an open modal: halfway to `base`, so the modal owns the
+    /// eye while the page behind stays recognizable (`specs/tui.md`). Non-RGB colors are the
+    /// terminal's own defaults, which have no known distance to `base`; they pass through.
+    pub fn scrim(&self, color: Color) -> Color {
+        match color {
+            Color::Rgb(..) => blend(color, self.base, 0.5),
+            other => other,
+        }
     }
 }
 
@@ -150,6 +175,7 @@ fn catppuccin() -> Theme {
     Theme {
         name: "catppuccin",
         palette: Palette {
+            base: Color::Rgb(0x1e, 0x1e, 0x2e),
             surface0: Color::Rgb(0x31, 0x32, 0x44),
             surface1: Color::Rgb(0x45, 0x47, 0x5a),
             surface2: Color::Rgb(0x58, 0x5b, 0x70),
@@ -167,6 +193,7 @@ fn catppuccin() -> Theme {
             ins_bg: Color::Rgb(0x1f, 0x3a, 0x2a),
             emph_del_bg: Color::Rgb(0x6e, 0x34, 0x46),
             emph_ins_bg: Color::Rgb(0x30, 0x55, 0x3f),
+            match_hl: Color::Rgb(0x5c, 0x51, 0x2b),
         },
         syntax: SyntaxChoice::Bundled(MOCHA_TM),
     }
@@ -280,6 +307,7 @@ fn derive(a: Anchors, appearance: Appearance) -> Palette {
     };
     let surface = |t: f64| blend(a.base, pole, t);
     Palette {
+        base: a.base,
         surface0: surface(0.045),
         surface1: surface(0.09),
         surface2: surface(0.14),
@@ -297,6 +325,7 @@ fn derive(a: Anchors, appearance: Appearance) -> Palette {
         ins_bg: readable_tint(a.green, a.base, a.text, appearance, false),
         emph_del_bg: readable_tint(a.red, a.base, a.text, appearance, true),
         emph_ins_bg: readable_tint(a.green, a.base, a.text, appearance, true),
+        match_hl: readable_tint(a.yellow, a.base, a.text, appearance, true),
     }
 }
 

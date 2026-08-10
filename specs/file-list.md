@@ -1,12 +1,12 @@
 ---
 Status: Current
 Created: 2026-06-24
-Last edited: 2026-07-09
+Last edited: 2026-07-18
 ---
 
 # File list
 
-The right-pane navigator: a directory tree that opens a file in the left pane. It lists the scope's changed files in `Changes` and the whole worktree in `All files`.
+The file navigator: a directory tree that opens a file in the read pane. It lists the scope's changed files in `Changes` and the whole worktree in `All files`.
 
 ## Overview
 
@@ -65,10 +65,11 @@ The list is a flat sequence of visible rows over the tree.
 ### Selection
 
 - The cursor selects a row. `j`/`k` and the arrows move it, skipping collapsed subtrees. The list scrolls to keep it visible.
-- Moving onto a file opens it in the left pane: its diff in `Changes`, its content in `All files`.
+- The hunk steps and the file skips move the cursor onto the file they open, from either pane (`input.md`).
+- Moving onto a file opens it in the read pane: its diff in `Changes`, its content in `All files`.
 - The wheel scrolls the viewport only. The selection and the open file stay put, so browsing never reloads a diff.
 - `←`/`→` or a click collapses and expands a directory. A click on a file selects and opens it. There is no `enter` activation.
-- `tab` moves focus to the left pane, to navigate and comment.
+- `tab` moves focus to the read pane, to navigate and comment.
 - A poll preserves the selection and expansions by path. A selected file that left the changeset falls back to the open file, then the first file.
 - In `All files` a poll adds and removes rows as the worktree changes, preserving cursor, scroll, and expansions by path.
 - Switching scope re-marks the `All files` tree in place. Only the markers and stats change.
@@ -76,15 +77,18 @@ The list is a flat sequence of visible rows over the tree.
 ### Presentation
 
 - A file row is `<marker> <name> <stats>`: the marker colored by kind, the basename bright, parent directories dimmed, stats right-aligned.
+- Stats read `+added −removed`: additions green, deletions red, a zero side dropped. A change with no countable lines (a binary file) shows no stats.
 - An ignored row dims whole, distinct from the marker colors. `All files` is the one place an ignored path is readable. An ignored file never carries a change marker, since every scope respects `.gitignore` (`review-model.md`).
 - A too-narrow path shortens with a middle ellipsis (`…/2026-06-23-changes/plan`), keeping the basename and stats visible.
 
 ## Non-goals
 
 - No reviewed-file state. Marking a file reviewed and greying it is roadmap.
-- No file content rendered here. The left pane renders the diff or content (`diff-view.md`).
+- No file content rendered here. The read pane renders the diff or content (`diff-view.md`).
 
 ## Related specs
 
 - [review-model](./review-model.md)
+- [input](./input.md)
 - [tui](./tui.md)
+- [search](./search.md)

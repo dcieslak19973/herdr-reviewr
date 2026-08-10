@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use herdr_reviewr::app::App;
+use herdr_reviewr::model::Scope;
 use tempfile::TempDir;
 
 pub struct Repo {
@@ -19,8 +21,6 @@ impl Repo {
     pub fn init() -> Self {
         let repo = Self { dir: TempDir::new().expect("tempdir") };
         repo.git(&["init", "-q", "-b", "main"]);
-        repo.git(&["config", "user.email", "test@herdr.test"]);
-        repo.git(&["config", "user.name", "Test"]);
         repo
     }
 
@@ -32,15 +32,53 @@ impl Repo {
         self.dir.path().to_path_buf()
     }
 
-    /// Run `git -C <repo> <args>`, asserting success, returning stdout.
-    pub fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git").arg("-C").arg(self.path()).args(args).output().expect("git");
+    /// Like [`Self::git`] with extra environment variables — a pinned committer date makes
+    /// commit-recency ordering deterministic without sleeping across a clock tick.
+    pub fn git_env(&self, args: &[&str], env: &[(&str, &str)]) -> String {
+        let out = Command::new("git")
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@herdr.test")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@herdr.test")
+            .envs(env.iter().copied())
+            .arg("-C")
+            .arg(self.path())
+            .args(args)
+            .output()
+            .expect("git");
         assert!(
             out.status.success(),
             "git {args:?} failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Run `git -C <repo> <args>`, asserting success, returning stdout.
+    pub fn git(&self, args: &[&str]) -> String {
+        self.git_env(args, &[])
+    }
+
+    /// Fabricate a remote-tracking default branch without a real remote: a
+    /// `refs/remotes/origin/<name>` ref at the given rev plus the `origin/HEAD` symref.
+    pub fn set_origin_default(&self, name: &str, rev: &str) {
+        let oid = self.git(&["rev-parse", rev]).trim().to_string();
+        self.git(&["update-ref", &format!("refs/remotes/origin/{name}"), &oid]);
+        self.git(&[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            &format!("refs/remotes/origin/{name}"),
+        ]);
+    }
+
+    /// Record `content` as the base-pick blob verbatim, bypassing `write_base_pick` — for
+    /// the values only a foreign writer could put on that shared ref.
+    pub fn write_raw_base_pick(&self, content: &str) {
+        let path = self.path().join("raw-pick");
+        std::fs::write(&path, content).unwrap();
+        let blob = self.git(&["hash-object", "-w", path.to_str().unwrap()]).trim().to_string();
+        self.git(&["update-ref", "refs/reviewr/base-pick", &blob]);
+        std::fs::remove_file(&path).unwrap();
     }
 
     pub fn write(&self, rel: &str, contents: &str) {
@@ -60,4 +98,72 @@ impl Repo {
         self.git(&["add", "-A"]);
         self.git(&["commit", "-q", "-m", message]);
     }
+}
+
+pub fn app_on(repo: &Repo) -> App {
+    let mut app = App::new(repo.path_buf(), Scope::Uncommitted, None);
+    app.reload().unwrap();
+    app
+}
+
+pub fn typed(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        app.input_push(ch);
+    }
+}
+
+/// A minimal open-PR snapshot. Tests override only the fields they exercise:
+/// `PrSnapshot { comments, ..common::pr_snapshot() }` — so a new snapshot field
+/// touches this one literal instead of every test.
+pub fn pr_snapshot() -> herdr_reviewr::forge::PrSnapshot {
+    use herdr_reviewr::forge::{Merge, PrSnapshot, PrState, Sync};
+    PrSnapshot {
+        number: 1,
+        title: "t".into(),
+        body: String::new(),
+        url: "u".into(),
+        state: PrState::Open,
+        is_draft: false,
+        head_ref: "feature".into(),
+        head_is_fork: false,
+        head_oid: String::new(),
+        base_ref: "main".into(),
+        merge: Merge::Clean,
+        sync: Sync::InSync,
+        checks: Vec::new(),
+        comments: Vec::new(),
+        truncated: false,
+    }
+}
+
+/// A minimal PR conversation comment. Tests override the fields they exercise:
+/// `Comment { body: "...".into(), ..common::comment() }`.
+pub fn comment() -> herdr_reviewr::forge::Comment {
+    use herdr_reviewr::forge::{Comment, CommentKind};
+    Comment {
+        kind: CommentKind::Comment,
+        author: "ann".into(),
+        author_is_bot: false,
+        anchor: "comment".into(),
+        body: "b".into(),
+        snippet: None,
+        created_at: "2026-06-27T10:00:00Z".into(),
+        is_resolved: false,
+        is_outdated: false,
+        reply_count: 0,
+    }
+}
+
+/// Switch to `tab` and service the deferred reload the switch schedules, so assertions run
+/// against the freshly reloaded state — the same sequence the event loop performs.
+pub fn enter_tab(app: &mut App, tab: herdr_reviewr::app::Tab) {
+    app.set_tab(tab).unwrap();
+    land_world(app);
+}
+
+/// Land the queued world refresh synchronously, as the worker's completion would.
+pub fn land_world(app: &mut App) {
+    let snapshot = herdr_reviewr::world::build(&app.world_input()).unwrap();
+    app.reconcile_world(snapshot);
+    app.world_request = None;
 }

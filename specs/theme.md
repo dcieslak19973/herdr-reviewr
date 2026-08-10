@@ -1,7 +1,7 @@
 ---
 Status: Current
 Created: 2026-06-29
-Last edited: 2026-07-10
+Last edited: 2026-07-31
 ---
 
 # Theme
@@ -15,7 +15,7 @@ A theme is a handful of anchor colors plus a paired syntax theme. Every other UI
 The user selects a theme by name, with the same name they use in herdr:
 
 ```toml
-# $HERDR_PLUGIN_CONFIG_DIR/config.toml
+# config.toml, in the resolved config directory (config.md)
 theme = "tokyo-night"
 ```
 
@@ -41,6 +41,7 @@ The derived slots:
 | `subtext0`                    | `text`, dimmed toward `base`              | secondary text                   |
 | `del_bg` / `ins_bg`           | `red` / `green` blended over `base`       | deletion / insertion row tint    |
 | `emph_del_bg` / `emph_ins_bg` | `red` / `green`, a stronger blend         | word-emphasis fill               |
+| `match_hl`                    | `yellow`, a stronger blend                | search match highlight           |
 
 The theme set:
 
@@ -57,6 +58,8 @@ A herdr name outside this set (`kanagawa`, `kanagawa-lotus`, `vesper`, `terminal
 - A theme lists its anchors. Derivation computes every other slot.
 - Each theme declares its `appearance`, light or dark. Dark themes lighten `base` for surfaces, light themes darken it.
 - The cursor, selection, and fold fills step `surface2` > `surface1` > `surface0`. The cursor is the strongest contrast, a fold the faintest.
+- Every visible pane fills its cursor row. The focused pane fills with `surface2`, the other with `surface1`, so which pane holds focus reads at a glance. A hidden navigator leaves one pane, filled with `surface2` (`tui.md`).
+- Dim text on a filled row lifts from `overlay0` to `subtext0`, in every list that fills a row. The file list's indent, a search hit's line number, and a picker row's state and tab all stay readable under the fill.
 - `catppuccin` pins its whole palette as a literal and renders as faithful Catppuccin Mocha.
 
 ### Diff-fill legibility
@@ -76,11 +79,11 @@ A herdr name outside this set (`kanagawa`, `kanagawa-lotus`, `vesper`, `terminal
 - Precedence: `--theme <name>` over the config `theme` over the default `catppuccin`.
 - The config file is re-read on refresh. Editing `theme` and refreshing re-themes without a relaunch.
 - Theme names match herdr's wherever both ship a palette, so a value copied from a herdr config resolves to the same palette.
-- Standalone, with no `HERDR_PLUGIN_CONFIG_DIR`, reviewr reads no config file.
+- With no config directory (`config.md`), reviewr reads no config file.
 
 ## Failure semantics
 
-reviewr only reads the config file, never writes it, so concurrent sidebars and refresh re-reads need no coordination.
+reviewr only reads the config file, never writes it, so concurrent reviewr panes and refresh re-reads need no coordination.
 
 - A missing config or omitted `theme` resolves to the default. Invalid plugin config follows `config.md`.
 - An unknown `--theme` override resolves to the default and logs the unsupported name.

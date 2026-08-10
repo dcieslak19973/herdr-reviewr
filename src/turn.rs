@@ -1,25 +1,36 @@
 //! Turn tracking for the `last-turn` scope.
 //!
-//! See `specs/herdr-host.md`. A turn starts when the agent enters `working` from a
-//! resting status (`idle`/`done`); a `blocked`→`working` or `unknown`→`working` step
-//! is a mid-turn resume, not a new turn. On a turn start the host captures a candidate
-//! worktree snapshot; it promotes the candidate to the live baseline once the turn has
-//! changed a file, so a question-only turn keeps the previous turn's diff.
+//! See `specs/herdr-host.md`. A turn belongs to the worktree, never to one agent
+//! (HH-TURN-PER-WORKTREE): [`WorktreeState`] folds every agent in the worktree into one
+//! work state, and a turn is that fold's rest→work edge. On a turn start the host captures
+//! a candidate worktree snapshot; it promotes the candidate to the live baseline once the
+//! turn has changed a file, so a question-only turn keeps the previous turn's diff.
 
 /// The agent status reported by `herdr agent list` (`agent_status`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Status {
     Idle,
     Working,
     Blocked,
     Done,
+    #[default]
     Unknown,
 }
 
 impl Status {
-    /// Parse the `agent_status` string; anything unrecognized is `Unknown`.
-    pub fn parse(s: &str) -> Self {
-        match s {
+    /// A resting status the agent waits at between turns — a new `working` after one of
+    /// these is a fresh instruction. `blocked` (a permission prompt) and `unknown` (a
+    /// transient overlay) are mid-turn, so they are not resting.
+    fn is_resting(self) -> bool {
+        matches!(self, Status::Idle | Status::Done)
+    }
+
+    /// The status one `agent_status` string means — the only place a wire spelling becomes a
+    /// status. A spelling reviewr does not know is `Unknown`, which is mid-turn rather than
+    /// resting, so a state herdr adds can never fabricate a turn edge. The row shows herdr's
+    /// own spelling rather than one of these names, so nothing maps back (`src/herdr.rs`).
+    pub fn from_wire(wire: &str) -> Self {
+        match wire {
             "idle" => Status::Idle,
             "working" => Status::Working,
             "blocked" => Status::Blocked,
@@ -27,20 +38,64 @@ impl Status {
             _ => Status::Unknown,
         }
     }
+}
 
-    /// A resting status the agent waits at between turns — a new `working` after one of
-    /// these is a fresh instruction. `blocked` (a permission prompt) and `unknown` (a
-    /// transient overlay) are mid-turn, so they are not resting.
-    fn is_resting(self) -> bool {
-        matches!(self, Status::Idle | Status::Done)
+/// The worktree's work state, folded from the statuses of every agent in it. Tracking
+/// watches this fold's edges rather than one agent's (see the module header).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorktreeState {
+    /// Every agent in the worktree rests. A worktree holding no agents rests too, so the
+    /// first agent to arrive and work starts a turn.
+    #[default]
+    Resting,
+    /// At least one agent works.
+    Working,
+    /// An agent is `blocked` or `unknown` and none works. A turn starts only from rest, so
+    /// this holds an open turn open instead of ending it or starting another.
+    Neither,
+}
+
+impl WorktreeState {
+    /// Fold the member agents' statuses. `working` wins over everything, since one agent
+    /// still editing means the worktree is still being worked on.
+    pub fn fold(statuses: impl IntoIterator<Item = Status>) -> Self {
+        let mut held = false;
+        for status in statuses {
+            if status == Status::Working {
+                return Self::Working;
+            }
+            held |= !status.is_resting();
+        }
+        if held { Self::Neither } else { Self::Resting }
     }
+}
+
+/// The lifecycle edges produced by one sample of the worktree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TurnTransition {
+    pub started: bool,
+    pub ended: bool,
 }
 
 /// The turn baseline lifecycle: the previous status, a candidate snapshot awaiting
 /// promotion, and the live baseline tree the `last-turn` diff reads.
 #[derive(Default, Debug)]
 pub struct TurnTracker {
-    prev: Option<Status>,
+    /// Whether the previous sample rested. A turn starts only on `Resting → Working`, and the
+    /// first sample never starts one, so this begins `false`.
+    prev_resting: bool,
+    /// Whether a `Working` sample has landed since the last rest. A turn reaches rest through
+    /// `Neither` whenever a permission prompt is answered by going idle, so the end edge
+    /// cannot be read from the previous sample alone.
+    ///
+    /// Deliberately not the same reading of the past as `prev_resting`, which `Neither` clears:
+    /// the start edge stays conservative and the end edge liberal, because a missed start
+    /// only widens the diff while a missed end strands the `PR` tab's refetch
+    /// (`specs/herdr-host.md` Turn tracking). Collapsing the two — leaving `prev_resting` set
+    /// on `Neither` and dropping this field — makes `Resting → Neither → Working` start a turn
+    /// and anchor its baseline after edits the agent already made, which shows less than the
+    /// turn wrote. Failure semantics forbids that.
+    worked: bool,
     candidate: Option<String>,
     baseline: Option<String>,
 }
@@ -48,7 +103,7 @@ pub struct TurnTracker {
 impl TurnTracker {
     /// Seed from the persisted baseline ref at startup (`None` until a turn is observed).
     pub fn with_baseline(baseline: Option<String>) -> Self {
-        Self { prev: None, candidate: None, baseline }
+        Self { baseline, ..Self::default() }
     }
 
     /// The live baseline tree the `last-turn` diff reads against.
@@ -65,22 +120,22 @@ impl TurnTracker {
         self.candidate.as_deref()
     }
 
-    /// Record a status sample; return `true` when a turn just started — the host should
-    /// snapshot the worktree now and hand it back via [`set_candidate`]. A start is a
-    /// transition into `Working` from a resting status; the first sample never starts a
-    /// turn, since its start was not observed.
-    pub fn observe(&mut self, status: Status) -> bool {
-        let started = status == Status::Working && self.prev.is_some_and(Status::is_resting);
-        self.prev = Some(status);
-        started
-    }
-
-    /// Whether this next sample *ends* a turn — a `working`→resting edge. After it the agent
-    /// has gone idle, so any commit it pushed or `gh` PR action it ran (e.g. `gh pr merge`) is
-    /// now reflected on the forge and the `PR` tab is worth refetching. Pure: unlike
-    /// [`observe`](Self::observe) it does not advance `prev`, so call it before `observe`.
-    pub fn ends_turn(&self, next: Status) -> bool {
-        self.prev == Some(Status::Working) && next.is_resting()
+    /// Record one sample of the worktree and return its complete lifecycle transition. A
+    /// start is a `Resting` to `Working` edge; the first sample never starts a turn, since
+    /// its start was not observed. An end is the return to rest of a worktree that has
+    /// worked, however many `Neither` samples sit between the two.
+    pub fn observe(&mut self, state: WorktreeState) -> TurnTransition {
+        let transition = TurnTransition {
+            started: state == WorktreeState::Working && self.prev_resting,
+            ended: self.worked && state == WorktreeState::Resting,
+        };
+        self.prev_resting = state == WorktreeState::Resting;
+        self.worked = match state {
+            WorktreeState::Working => true,
+            WorktreeState::Resting => false,
+            WorktreeState::Neither => self.worked,
+        };
+        transition
     }
 
     /// Store the worktree snapshot captured at a turn start as the pending candidate,
@@ -102,60 +157,102 @@ impl TurnTracker {
 
 #[cfg(test)]
 mod tests {
-    use super::{Status, TurnTracker};
+    use super::{Status, TurnTracker, WorktreeState};
 
     #[test]
-    fn parse_maps_known_states_and_falls_back_to_unknown() {
-        assert_eq!(Status::parse("idle"), Status::Idle);
-        assert_eq!(Status::parse("working"), Status::Working);
-        assert_eq!(Status::parse("blocked"), Status::Blocked);
-        assert_eq!(Status::parse("done"), Status::Done);
-        assert_eq!(Status::parse("starting"), Status::Unknown);
-        assert_eq!(Status::parse(""), Status::Unknown);
+    fn from_wire_reads_herdrs_four_spellings_and_folds_the_rest_to_unknown() {
+        // The spellings are herdr's, so they are pinned literally rather than derived from
+        // anything reviewr owns (`specs/herdr-host.md`).
+        assert_eq!(Status::from_wire("idle"), Status::Idle);
+        assert_eq!(Status::from_wire("working"), Status::Working);
+        assert_eq!(Status::from_wire("blocked"), Status::Blocked);
+        assert_eq!(Status::from_wire("done"), Status::Done);
+        assert_eq!(Status::from_wire("unknown"), Status::Unknown);
+        // A state herdr adds is unknown to tracking, and unknown is never resting, so the next
+        // `working` sample resumes the turn in flight instead of starting a new one.
+        assert_eq!(Status::from_wire("compacting"), Status::Unknown);
+        assert!(!Status::from_wire("compacting").is_resting());
     }
 
     #[test]
-    fn a_turn_starts_when_working_follows_a_resting_status() {
+    fn an_empty_worktree_rests_so_its_first_working_agent_starts_a_turn() {
+        // The fold that makes a freshly opened reviewr pane track the next turn it sees, rather
+        // than waiting for an agent that was already there (`specs/herdr-host.md`).
+        assert_eq!(WorktreeState::fold([]), WorktreeState::Resting);
         let mut t = TurnTracker::default();
-        assert!(!t.observe(Status::Idle), "the first sample never starts a turn");
-        assert!(t.observe(Status::Working), "idle → working starts a turn");
+        t.observe(WorktreeState::fold([]));
+        assert!(t.observe(WorktreeState::fold([Status::Working])).started);
     }
 
     #[test]
-    fn done_is_resting_so_working_after_it_starts_a_turn() {
-        let mut t = TurnTracker::default();
-        t.observe(Status::Done);
-        assert!(t.observe(Status::Working), "done → working starts a turn");
+    fn one_working_agent_makes_the_whole_worktree_work() {
+        // Any agent still editing means the worktree is still being worked on, so `working`
+        // wins over every resting or held peer (HH-TURN-PER-WORKTREE).
+        assert_eq!(WorktreeState::fold([Status::Idle, Status::Working]), WorktreeState::Working);
+        assert_eq!(WorktreeState::fold([Status::Blocked, Status::Working]), WorktreeState::Working);
+        assert_eq!(WorktreeState::fold([Status::Idle, Status::Done]), WorktreeState::Resting);
     }
 
     #[test]
-    fn blocked_and_unknown_to_working_are_continuations() {
+    fn a_held_agent_with_no_worker_leaves_the_worktree_neither() {
+        // `blocked` is a permission prompt and `unknown` a transient overlay. Neither rests,
+        // so neither lets the next `working` sample start a fresh turn.
+        assert_eq!(WorktreeState::fold([Status::Blocked, Status::Idle]), WorktreeState::Neither);
+        assert_eq!(WorktreeState::fold([Status::Unknown]), WorktreeState::Neither);
+    }
+
+    #[test]
+    fn a_turn_starts_when_the_worktree_works_after_resting() {
         let mut t = TurnTracker::default();
-        t.observe(Status::Idle);
-        t.observe(Status::Working); // turn started
-        t.observe(Status::Blocked); // permission prompt mid-turn
-        assert!(!t.observe(Status::Working), "blocked → working resumes the same turn");
-        t.observe(Status::Unknown); // transient overlay
-        assert!(!t.observe(Status::Working), "unknown → working resumes the same turn");
+        assert!(!t.observe(WorktreeState::Resting).started, "the first sample never starts a turn");
+        assert!(t.observe(WorktreeState::Working).started, "resting → working starts a turn");
+    }
+
+    #[test]
+    fn a_held_worktree_returning_to_work_is_a_continuation() {
+        let mut t = TurnTracker::default();
+        t.observe(WorktreeState::Resting);
+        t.observe(WorktreeState::Working); // turn started
+        t.observe(WorktreeState::Neither); // permission prompt mid-turn
+        assert!(
+            !t.observe(WorktreeState::Working).started,
+            "neither → working resumes the same turn"
+        );
     }
 
     #[test]
     fn a_turn_ends_only_on_a_working_to_resting_edge() {
         let mut t = TurnTracker::default();
-        assert!(!t.ends_turn(Status::Idle), "no prior working sample, so no turn to end");
-        t.observe(Status::Idle);
-        t.observe(Status::Working); // mid-turn
-        assert!(!t.ends_turn(Status::Blocked), "working → blocked is a mid-turn pause, not an end");
-        assert!(t.ends_turn(Status::Idle), "working → idle ends the turn");
-        assert!(t.ends_turn(Status::Done), "working → done ends the turn");
-        t.observe(Status::Idle);
-        assert!(!t.ends_turn(Status::Working), "idle → working starts, never ends, a turn");
+        assert!(!t.observe(WorktreeState::Resting).ended, "no prior work, so no turn to end");
+        assert!(!t.observe(WorktreeState::Working).ended, "resting → working starts, never ends");
+        assert!(
+            !t.observe(WorktreeState::Neither).ended,
+            "working → neither is a mid-turn pause, not an end"
+        );
+        t.observe(WorktreeState::Working);
+        assert!(t.observe(WorktreeState::Resting).ended, "working → resting ends the turn");
+    }
+
+    #[test]
+    fn a_turn_held_by_a_prompt_still_ends_when_the_worktree_rests() {
+        // An agent works, hits a permission prompt, and the answer sends it idle. The path is
+        // working → neither → resting, so no `working` sample is ever adjacent to the end.
+        // Missing this edge strands the `PR` tab's per-turn refetch (`src/lib.rs`).
+        let mut t = TurnTracker::default();
+        t.observe(WorktreeState::Resting);
+        t.observe(WorktreeState::Working);
+        assert!(!t.observe(WorktreeState::Neither).ended, "the prompt holds the turn open");
+        assert!(t.observe(WorktreeState::Resting).ended, "resting after it ends the turn");
+        assert!(
+            !t.observe(WorktreeState::Resting).ended,
+            "a turn ends once, not on every resting sample after it"
+        );
     }
 
     #[test]
     fn a_lone_first_working_sample_never_starts_a_turn() {
         let mut t = TurnTracker::default();
-        assert!(!t.observe(Status::Working), "we did not observe this turn's start");
+        assert!(!t.observe(WorktreeState::Working).started, "we did not observe this turn's start");
     }
 
     #[test]
@@ -180,13 +277,13 @@ mod tests {
     fn a_question_only_turn_keeps_the_previous_baseline() {
         // Turn A edits a file: candidate captured then promoted.
         let mut t = TurnTracker::default();
-        t.observe(Status::Idle);
-        t.observe(Status::Working);
+        t.observe(WorktreeState::Resting);
+        t.observe(WorktreeState::Working);
         t.set_candidate("turn-a".into());
         t.promote();
         // Turn B is question-only: candidate captured at its start, never promoted.
-        t.observe(Status::Idle);
-        t.observe(Status::Working);
+        t.observe(WorktreeState::Resting);
+        t.observe(WorktreeState::Working);
         t.set_candidate("turn-b".into());
         assert_eq!(t.baseline(), Some("turn-a"), "the unpromoted turn keeps A's baseline");
     }

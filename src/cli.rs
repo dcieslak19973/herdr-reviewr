@@ -16,16 +16,15 @@ use crate::model::{Comment, Side};
 
 const USAGE: &str = "usage: herdr-reviewr comment add --file <path> --start <n> [--end <n>] [--side new|old] [--lines <snippet>] [--author user|agent] --text <text>\n       herdr-reviewr comment list [--json] [--all]\n       herdr-reviewr comment resolve <id>\n       herdr-reviewr comment rm <id>\n       herdr-reviewr sidebar [toggle|open|close|auto-open]\n       herdr-reviewr skill-path\n       herdr-reviewr skill-install [--target <dir> | --project] [--copy] [--force]\n";
 
-/// Entry point called from `main` with the full process argv (`args[0]` is the program
-/// name, `args[1]` the subcommand). Only reached when `main` has already confirmed
-/// `args[1]` is `"comment"` or `"skill-path"`. Takes the `Vec` by value (the planned
-/// interface): `main` has no further use for argv, so ownership moves here.
-#[allow(clippy::needless_pass_by_value)]
-pub fn run(args: Vec<String>) -> ExitCode {
-    match args.get(1).map(String::as_str) {
-        Some("comment") => comment(&args[2..]),
+/// Entry point called with the CLI-subcommand slice of argv: `args[0]` is the subcommand
+/// (`"comment"`, `"skill-path"`, or `"skill-install"`) and `args[1..]` are its own arguments.
+/// The caller (`main`) has already stripped the program name and confirmed `args[0]` names a
+/// subcommand this module handles.
+pub fn run(args: &[String]) -> ExitCode {
+    match args.first().map(String::as_str) {
+        Some("comment") => comment(&args[1..]),
         Some("skill-path") => skill_path(),
-        Some("skill-install") => skill_install(&args[2..]),
+        Some("skill-install") => skill_install(&args[1..]),
         _ => usage_error(),
     }
 }

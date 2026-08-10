@@ -6,77 +6,368 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.14.0] — 2026-07-30
+## [0.31.0] — 2026-08-09
+
+This is the `dcieslak19973/herdr-reviewr` fork, synced to upstream v0.30.1 with the
+fork's distinct features re-applied on top of upstream's architecture:
 
 ### Added
-- **Windows support.** Prebuilt `x86_64-pc-windows-msvc` release binary, `herdr/install.ps1`
-  build step, per-platform manifest commands, clipboard via `clip`, and browser open via
-  `rundll32`.
+- **Bitbucket Data Center backend.** A self-hosted `bitbucket_host` classifies its remotes and reads pull requests over the REST API (`curl` + git-credential/`BITBUCKET_TOKEN`), alongside upstream's GitHub/GitLab/Azure DevOps providers.
+- **Agent comments.** A worktree-scoped persistent comment store under the git dir, shared by the reviewer (TUI) and the coding agent (new `comment` CLI subcommands), plus the bundled `reviewr-comments` skill and a `skill-install` subcommand. The `comment_sync` config key (`immediate` | `on-send`) governs when reviewer comments persist.
+- **Windows support.** A PATHEXT-aware tool probe, a `rundll32` URL opener, `clip` clipboard, a `sidebar` subcommand (pane orchestration in Rust for platforms without bash), an `install.ps1` binary installer, a per-platform `herdr-plugin.toml`, and an `x86_64-pc-windows-msvc` release target.
+
+## [0.30.1] — 2026-08-08
+
+### Fixed
+- **Selecting upward.** A range selected from the bottom up now comments on every line in it, not just the line it started from ([#50](https://github.com/persiyanov/herdr-reviewr/issues/50)).
+
+## [0.30.0] — 2026-08-08
+
+### Added
+- **Base picker.** `B`, or a click on the base name, picks the branch the `branch` scope diffs against, remembered per repository.
+- **The header names the base.** `vs dev` while it resolves, `vs main · dev missing` when a pick stops resolving, `no base` when nothing does.
 
 ### Changed
-- The sidebar actions and `worktree.created` hook now run `herdr-reviewr sidebar <mode>` — the
-  `herdr/sidebar.sh` script is retired and `jq` is no longer a runtime dependency; on
-  macOS/Linux `bash` remains only as the one-line exec wrapper that expands
-  `$HERDR_PLUGIN_ROOT`.
-- `min_herdr_version` is now 0.7.5 (item-level manifest `platforms` support; older herdrs
-  refuse cleanly instead of running both `[[build]]` twins). Windows action ids carry a
-  `-windows` suffix.
+- **One resolution chain.** `--base`, then your pick, then `origin/HEAD`, and no guessing anywhere in it.
+- **`base_branches` is retired.** A config still carrying the key fails to load. Drop it and press `B` instead.
+- **The `All files` tab reads `Files`,** the header stats moved to the right, and the header `Send` button is gone.
 
-## [0.13.1] — 2026-07-12
+## [0.29.0] — 2026-08-01
+
+### Changed
+- **Table cell wrapping.** An over-wide table now shrinks its widest columns and wraps their
+  cells instead of falling back to raw source. Tied columns shrink together. Each column keeps
+  at least 8 cells, and only a table too wide at every floor still renders as its source text.
+
+## [0.28.0] — 2026-07-31
 
 ### Added
-- **`skill-install` subcommand.** One command wires the reviewr-comments skill into your
-  agent: `herdr-reviewr skill-install` symlinks it into Claude Code's personal skills
-  directory (`--copy` for a frozen copy, `--force` to replace, `--target` for anywhere
-  else), and `--project` installs into the repo's universal `.agents/skills/` directory,
-  which most skill-aware harnesses read. Idempotent; prints a CLAUDE.md snippet that makes
-  agents check comments proactively.
-- **Cross-harness install docs.** The README's "Working with agents" section now leads
-  with `npx skills add dcieslak19973/herdr-reviewr --skill reviewr-comments -g` — the
-  skills CLI installs into every supported harness at once — with `skill-install` as the
-  offline/no-Node path and an AGENTS.md pointer for harnesses without a skill system.
+- **Hide the navigator.** `z` hides the files navigator so the diff takes the whole body, and
+  shows it again in its kept position and share. While hidden, `tab` brings it back focused,
+  the footer offers `z show`, and the `PR` tab keeps its navigator. Rebind via `navigator-hide`.
+
+## [0.27.1] — 2026-07-31
+
+### Fixed
+- **The stable launch paths now survive the install.** The installer's build step runs in a
+  staging checkout that herdr renames afterwards, so the `~/.local/bin/herdr-reviewr` and
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` links pointed at a
+  directory that no longer existed. Every toggle, open, close, or auto-open now re-points
+  both links at the live plugin root, and the installer aims them at the runtime root when
+  herdr provides one.
+
+## [0.27.0] — 2026-07-31
+
+### Added
+- **Any pane running the binary is a full reviewr pane.** A layout plugin or a hand-typed
+  command launches reviewr with `command = "herdr-reviewr"` and gets the same pane the
+  toggle opens: the binary asks herdr for your plugin config when `HERDR_PLUGIN_CONFIG_DIR`
+  is not set, and the toggle, open, and close actions recognize every reviewr pane by its
+  foreground process instead of a label. The installer links the binary at the stable paths
+  `~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr` and
+  `~/.local/bin/herdr-reviewr`, so layouts have a fixed command to name. (#20)
+
+### Changed
+- **The sidebar is now the pane.** The action titles read "reviewr: toggle/open/close pane",
+  and the docs follow. The keybindings and action ids are unchanged.
+
+## [0.26.2] — 2026-07-29
+
+### Fixed
+- **Send arrives intact when the agent input is in vim normal mode.** The batch went to the
+  agent as raw bytes, so a vim-style input resting in normal mode ran its leading characters
+  as commands: `bit/…` arrived as `t/…`, and a batch starting with `dd` could edit whatever
+  was already typed. The send now travels as one bracketed paste, which the input inserts
+  literally in any mode. A paste terminator inside the batch is removed so it cannot end the
+  frame early. The clipboard export is unchanged. (#41)
+
+## [0.26.1] — 2026-07-28
+
+### Fixed
+- **A `tab`-placement sidebar is now labeled in the tab bar.** herdr gives a fresh tab a bare
+  number, so the sidebar showed up as a stray like `4` and got closed as clutter. It now names
+  the tab `reviewr`. The rename is best-effort, so an open that already succeeded never fails
+  because the rename did.
+
+## [0.26.0] — 2026-07-28
+
+### Changed
+- **Last turn works with any number of agents, in any sidebar placement.** A turn now belongs to
+  the worktree rather than to one agent reviewr had to guess at. Work starts when any agent in the
+  worktree starts and ends when they all stop, so two agents on one worktree read as one turn
+  instead of stalling the scope. Before, anything reviewr could not resolve to exactly one agent
+  left `last turn` waiting forever, which is what happened with a second agent around or with the
+  sidebar in its own tab. The `PR` tab's per-turn refresh was stuck the same way and comes back
+  with it.
+- **Last turn says why it is empty.** It reads `no agent works here` when nothing is running in the
+  worktree, and `waiting for the first turn` when an agent is there but has not started yet. The
+  old single message claimed a turn was coming even when none could.
+- **reviewr now needs herdr 0.7.5.** Worktree turns read each agent's working directory from
+  `herdr agent list`, which older versions are not known to report.
+
+### Fixed
+- **The `PR` tab refreshes after a turn you answered a prompt in.** A turn that went from working
+  to a permission prompt and then straight to idle never registered as having ended, so the tab
+  skipped its per-turn refetch for it.
+
+## [0.25.1] — 2026-07-27
+
+### Changed
+- **Selected rows keep their dim parts readable.** A row's secondary text used to all but vanish
+  under the selection fill. It now brightens with the fill, in every list that has one: the file
+  list's indent, a search hit's line number, and a picker row's state and tab.
+
+### Fixed
+- **A failed send says something you can read.** When `herdr` refused a send, the status filled
+  with the command reviewr had run, which carries your whole review as one argument. A 40-column
+  footer answered with a fragment of your own comments. It now says `agent not found`. herdr's own
+  wording is a JSON envelope around a pane id, so that goes to the log and never to you.
+- **A chord never sends by accident.** `Alt+Enter` and `Shift+Enter` mean "newline, not submit" in
+  the comment editor, and they used to send the whole review from the agent picker. Only the
+  unmodified `enter` sends now. Modified digits no longer move the highlight either.
+- **The footer never spends its width twice.** On a pane too narrow to show a long status, the
+  footer used to drop the cursor's actions to make room for it and then drop the status too,
+  leaving the row with neither. A status that cannot be shown now costs the row nothing.
+- **The picker keeps its keys on the PR tab.** A picker opened there would have handed `q` and the
+  digits to the tab behind it.
+
+## [0.25.0] — 2026-07-26
+
+### Added
+- **Send picks the agent when there are several.** `Send` used to refuse in a workspace with more
+  than one agent, leaving the clipboard as the only route, which reaches nothing when you review
+  over SSH. It now opens a picker listing every agent in the workspace. Move with the arrows or
+  `j`/`k`, jump with `1`–`9`, `enter` sends, `esc` keeps every comment. A click highlights a row,
+  and a click on the highlighted row sends. The highlight opens on the agent you sent to last,
+  marked `last used`, else the agent the sidebar was opened beside. A successful send names the
+  agent it went to.
+- **Modals own the screen.** While the picker or the comments list is open, everything behind it
+  dims toward the theme background. The footer stays bright with the modal's own keys.
+
+### Changed
+- One agent still sends straight through, with no picker. Turn tracking is unchanged.
+
+### Fixed
+- **The status survives a narrow sidebar.** A message longer than the room left on the footer's
+  first row used to vanish outright, so a 40-column pane answered `s` with nothing at all. It named
+  neither the agent it reached nor the reason it refused. The status now truncates to fit, and the
+  cursor's actions step aside for it, since `?` already lists them.
+- **A picker row names any state herdr reports.** An agent status reviewr had never heard of read
+  `unknown` on the row. The row now shows herdr's own spelling for it, and herdr's own label.
+
+## [0.24.1] — 2026-07-23
+
+### Changed
+- Linux release binaries are now statically linked via musl (matching herdr itself), removing the
+  glibc ≥ 2.39 requirement that prevented installation on Amazon Linux 2023, Debian 12,
+  Ubuntu 22.04, and other distributions.
+
+## [0.24.0] — 2026-07-23
+
+### Changed
+- **The PR tab resolves by branch name.** The tab shows the newest PR opened from the current
+  branch, the same answer `gh pr view` gives, on GitHub, GitLab, and Azure DevOps. A merged PR
+  stays visible until the branch's next PR replaces it. A new branch that reuses a deleted
+  branch's name starts empty. Work pushed from main as `HEAD:<side-branch>` shows the side
+  branch's PR. On a fork, a PR into upstream outranks the fork's own. The ambiguous
+  several-PRs state is gone, and so is the commit-identity machinery behind it.
+
+## [0.23.0] — 2026-07-23
+
+### Added
+- **GitLab and Azure DevOps in the PR tab.** The read-only PR tab now mirrors merge requests on
+  GitLab and pull requests on Azure DevOps, not only GitHub. GitLab works on gitlab.com and one
+  self-hosted instance set with `gitlab_host`, through the `glab` CLI. Azure DevOps works on
+  dev.azure.com, the `*.visualstudio.com` organization hosts, and one self-hosted server set with
+  `azure_devops_host`, through `az` with the azure-devops extension. Each forge fills the same
+  snapshot and shows its own vocabulary — merge request `!42` on GitLab, pull request `#12` on
+  Azure DevOps (#29, #30).
+
+## [0.22.1] — 2026-07-22
+
+### Fixed
+- **Send works on herdr 0.7.5.** herdr 0.7.5 removed `agent send`, so pressing send failed and
+  the comments stayed put (#28). Comments now go through `pane send-text` — the same
+  literal-text, no-Enter write — which works on every supported herdr from 0.7.0 up.
+
+## [0.22.0] — 2026-07-21
+
+### Added
+- **Find in file.** `Ctrl+F` searches the open file. Every match lights up, and `enter` and the
+  arrows step the cursor between them, expanding a fold to reveal a hidden match. The query is a
+  literal, smart-case substring. `esc` closes the band and leaves you on the match.
+- **Modifier chords in keybindings.** `[keybindings]` now binds an action to a `ctrl+`/`alt+`
+  chord, not only a bare character. `find` defaults to `ctrl+f` and rebinds like any other action.
+
+### Changed
+- **The footer expands on demand.** By default it shows one row — the next step, the cursor's
+  actions, and `send` — closing with a `?` at the right. Press `?` to open every shortcut that works
+  here, grouped into `do`, `go`, and `move` bands. Press `?` or `esc` to close it. The always-on
+  cluster of muted keys is gone. `keys` binds the toggle, default `?`.
+- **Footer hints spell out named keys.** `shift+enter` and `tab` replace the `⇧⏎` and `⇥` glyphs, so
+  a hint reads the same on screen as in the config.
+
+## [0.21.0] — 2026-07-20
+
+### Added
+- **Search.** `/` from any tab opens a search screen over the whole worktree. Fuzzy file names
+  and literal code grep share one list, in the engine's order. Pick a result to land on its
+  file and line. Matching, ranking, and indexing come from
+  [fff](https://github.com/dmtrKovalenko/fff). Ranking improves as you pick, and the frecency
+  store lives in the cache directory, never the worktree.
+
+## [0.20.1] — 2026-07-18
+
+### Changed
+- **Input never waits on a refresh.** Every background rebuild — the changed set, the file tree,
+  the agent-status sample, the turn snapshot — now runs on a worker thread. A keypress paints
+  immediately even while the sidebar refreshes, and a poll tick can no longer swallow a keystroke
+  mid-scroll. Results land only while they still describe what you are looking at, so the view is
+  at worst briefly stale, never wrong.
+- **A refresh indicator in the tab strip.** Pressing `r` lights a one-cell `⟳` beside the tabs
+  immediately, held long enough to read. Background refreshes show it only when they run long — a
+  cold scan, a slow fetch, a hung git. It replaces the `PR` pane's `· refreshing…` title note, and
+  its reserved cell means the header never shifts.
+- **Scope switches repaint consistently.** Switching scope in `All files` updates the header count
+  and every row's change badge in the same frame, with the tree itself refreshing right behind.
+
+## [0.19.0] — 2026-07-18
+
+### Changed
+- **Tab switches are instant.** Entering `Changes` or `All files` paints the tab exactly as you
+  left it in one frame and refreshes right behind it, on any repo size. A first-ever visit loads
+  before its frame, so the header never describes a tab that shows nothing.
+- **`All files` is fast in huge repos.** The ignored-tree listing no longer walks inside ignored
+  directories. Entering the tab dropped from over a second to well under 200ms on a 10k-file repo
+  with gigabytes of ignored trees, and every background refresh sheds the same cost.
+- **The `PR` tab resolves by published commits, not branch names.** The worktree's published
+  work nominates its pull request by exact commit identity, so renames, deletions, and same-named
+  fork branches cannot misdirect the tab.
+- **The `PR` tab keeps its snapshot while it refreshes.** New commits no longer blank the tab to
+  `loading`. It clears only when the repository itself changes. A turn-end refetch now fires from
+  any tab, so opening `PR` after the agent finishes finds fresh data already on its way.
+
+## [0.18.1] — 2026-07-16
+
+### Changed
+- **Copy and onboarding are clearer.** Export confirmations now distinguish adding comments to the
+  agent input from copying them, PR failures pair the problem with a concrete recovery step, and
+  config errors explain that a corrected file reloads automatically. The README now shows how to
+  open reviewr immediately after installation, gives the last-turn diff its own feature callout,
+  and demonstrates the full comment-to-agent handoff.
+- **The demo shows reviewr itself.** The README recording now runs the installed plugin full-screen
+  with its real terminal palette instead of simulating an adjacent agent pane.
+
+## [0.18.0] — 2026-07-15
+
+### Changed
+- **Fork pull requests resolve automatically.** A readable, supported `upstream` remote now selects
+  the base repository. An absent or unsupported `upstream` falls back to `origin`; a Git read failure
+  stays visible and never falls through. SSH host aliases are no longer inferred: GitHub.com and
+  configured Enterprise hosts must match exactly. Literal `github.com-*` Enterprise hostnames remain
+  valid when configured exactly. A Git failure before the target resolves replaces any snapshot
+  whose repository can no longer be proven. The ordinary empty state now says `No pull request yet.
+  Ready to ship?`. (#18; thanks @ubuntudroid for the report and original fix.)
+- **Rust 1.97 is now the minimum toolchain.** Local builds, Clippy, CI, and release builds use the
+  same pinned compiler version.
+
+## [0.17.0] — 2026-07-14
+
+### Added
+- **Four-way navigator placement.** The navigator can sit on the right, bottom, left, or top of
+  every tab. Press `p` to cycle clockwise, or set `navigator_position` in plugin config. Side and
+  stacked layouts remember separate sizes, with `<` / `>` and divider dragging available on both
+  axes. (#16)
+- **Independent PR navigator scrolling.** The checks and comments viewport scrolls without moving
+  its selection. `Tab` changes pane focus, and page keys scroll the focused PR pane.
+
+### Changed
+- **Navigator resize actions have position-neutral names.** Config uses `navigator-grow` and
+  `navigator-shrink`; `list-wider` and `list-narrower` remain accepted aliases.
+- **Breaking: `p` is a new default key.** A custom binding that already uses `p` now collides with
+  `navigator-position` and must be moved before the config becomes valid again.
+
+## [0.16.1] — 2026-07-13
+
+### Fixed
+- **The diff cursor is visible from the file list.** The diff pane hid its cursor row whenever the
+  file list held focus, so a hunk step driven from the list moved a cursor you could not see. Both
+  panes now always mark their cursor row, filling it brightly when the pane has focus and a step
+  softer when it does not — the file list already behaved this way.
+
+## [0.16.0] — 2026-07-13
+
+### Added
+- **Changeset traversal.** `]` and `[` jump to the next and previous hunk, so the whole changeset
+  reads hunk by hunk without a detour through the file list. At a file's last hunk the key stops:
+  the footer offers `] next file`, and pressing it again crosses, so a held key never flies past a
+  file. A file with no hunk — a binary, a pure rename — is crossed over. `f` and `F` jump to the
+  next and previous file outright, from either pane. All four are rebindable, like the rest of the
+  keymap.
+
+### Changed
+- **Pane divider keys.** The divider moves with `<` and `>`, each key pointing the way it goes, so
+  `<` widens the file list and `>` narrows it. The old `]` and `[` now step hunks.
+- **Breaking: `]`, `[`, `f`, `F`, `<`, and `>` are new default keys.** A `[keybindings]` config
+  that binds any of them to another action now collides with a default. A collision makes the
+  whole config invalid, so the sidebar shows only the config error until you move the key. The
+  error names both actions involved.
+
+## [0.15.0] — 2026-07-13
+
+### Added
+- **Aggregate change stats in the header.** The header now shows the active scope's line totals
+  next to the changed-file count (`9 changed  +42 −18`), colored like the per-file stats. A zero
+  side drops, and an empty changeset shows the bare count.
+- **Configurable startup scope.** A new `default_scope` config key (`"uncommitted"`, `"branch"`,
+  or `"last-turn"`) names the scope the sidebar starts in. It seeds only a fresh sidebar:
+  switching with `u`/`b`/`t` wins for the session, and a config reread never switches the
+  active scope.
+
+## [0.14.0] — 2026-07-13
+
+### Changed
+- **Markdown preview in the Changes tab.** The `preview` binding (default `m`) now toggles the
+  rendered preview from a markdown file's diff, not only in All files. It renders the file's
+  current content, so a deleted file's toggle is inert. Returning to the diff leaves the cursor,
+  scroll, and folds exactly where they were. The preview choice is kept per tab.
 
 ## [0.13.0] — 2026-07-12
 
 ### Added
-- **Bidirectional agent/user comments.** Comments now persist in a per-worktree store
-  (`<git-dir>/reviewr/comments/`, one JSON file each) that both the sidebar and the coding
-  agent read and write. The agent uses new CLI subcommands on the reviewr binary —
-  `comment add`, `comment list [--json] [--all]`, `comment resolve <id>`, `comment rm <id>` —
-  and `herdr-reviewr skill-path` prints a bundled skill that teaches the loop: read the
-  reviewer's open comments, address them, resolve them, and leave anchored notes of its own.
-  Agent notes render as labeled cards in the diff within a poll; `x` in the comments list
-  resolves or reopens any comment, and `h` hides resolved cards in the diff pane. See the
-  README's "Working with agents".
-- **`comment_sync` config key.** `"immediate"` (default) persists your comments as you save
-  them, so the agent can act on them at any time; `"on-send"` keeps them pane-local until `s`.
+- **Markdown rendering.** PR comment bodies and the PR description render as styled markdown —
+  headings, emphasis, lists, quotes, links with dim destinations, tables, and fenced code
+  highlighted with the same syntax theme as the diff panes. A wide table degrades to its source
+  text. Control characters and bidi overrides in bodies render as visible placeholders, never raw.
+- **PR description card.** A non-empty PR description pins a `description` row at the top of
+  the PR tab's navigator, above the checks. Its body reads in the left pane.
+- **Markdown preview in All files.** The `preview` binding (default `m`) toggles a read-only
+  rendered preview on `.md`/`.markdown` files, named `· preview` in the pane title. Source stays
+  the commentable view. The toggle carries your reading position both ways, and an unscrolled
+  round-trip restores the exact cursor and scroll.
+- **Clickable links.** A link in rendered markdown — the preview, the PR description, or a
+  comment body — opens in the browser on click. An anchor link (`#section`) scrolls to its
+  heading instead. Only `http`/`https` destinations open, anything else is inert, and a
+  destination carrying control or bidi characters never reaches the OS.
 
-### Changed
-- **Send no longer consumes comments.** `s` exports open, user-authored comments and leaves
-  them in place until resolved or deleted; the Send count reflects exactly what will be sent.
-
-## [0.12.0] — 2026-07-11
-
-First release of the `dcieslak19973/herdr-reviewr` fork (upstream: `persiyanov/herdr-reviewr`).
+## [0.12.0] — 2026-07-12
 
 ### Added
-- **GitLab merge-request support in the PR tab.** Self-hosted instances via a bare `gitlab_host`
-  in reviewr's `config.toml`; GitLab.com works out of the box. MRs resolve across the same
-  candidate branches, pipelines render as checks, discussions as comments and inline findings,
-  and the tab reads **MR**. Requires an authenticated `glab` CLI.
-- **Bitbucket Data Center pull-request support in the PR tab.** Set `bitbucket_host`; both
-  `/scm/`-prefixed HTTPS and SSH origins resolve to the project key and repo slug. Auth is an
-  HTTP access token from `BITBUCKET_TOKEN` or git's credential store, passed to `curl` on stdin —
-  never on a command line. Merge conflicts and vetoes, build statuses, and comment threads all
-  surface. Bitbucket Cloud (bitbucket.org) is not supported.
-- **Per-forge degraded states.** A missing tool, an unauthenticated host, or a missing Bitbucket
-  token each show their own remedy; credential lookups never prompt on the terminal.
+- **Customizable keybindings.** A `[keybindings]` table in reviewr's `config.toml` rebinds every
+  single-key shortcut per action, with several keys per action so CJK input sources can alias the
+  composed character their layout produces on the same physical key (e.g. `comment = ["c", "ㅊ"]`).
+  A key bound to two actions invalidates the whole file with an error naming both actions. Footer
+  and header hints follow the active bindings. (#12)
 
 ### Changed
-- **Linux binaries are static musl builds.** They run on any glibc (or none); CI asserts
-  staticness on every build. macOS binaries are unchanged.
-- **Plugin identity is `dcieslak19973.reviewr`.** Keybindings and config paths use the new id;
-  install from `dcieslak19973/herdr-reviewr`.
+- **The comments list no longer closes on `q`.** It closes on `esc` and the `comments` binding
+  (default `l`). `q` inside the list is inert.
+- **Bindings act uniformly wherever their action fires.** The comments list now answers `S` and
+  `Y` for send and copy, matching the main panes.
+- **Ctrl chords no longer trigger character shortcuts.** A bound key fires only unmodified.
+  `ctrl+u` / `ctrl+d` half-page movement and the comment editor's chords are unchanged.
+- **Degraded PR messages name the active refresh key.** "press r" hints follow a rebound
+  `refresh` binding.
 
 ## [0.11.0] — 2026-07-10
 

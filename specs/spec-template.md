@@ -5,15 +5,16 @@ Last edited: YYYY-MM-DD
 ---
 
 <!--
-A spec is a communication medium. The user reviews it. Contributors learn from it.
-It is never a scratchpad. Optimize for reading speed, even in a one-line edit.
-The full bar: references/writing-great-specs.md. The essentials:
+A spec is the set of decisions currently in force, written so nobody re-decides one unknowingly.
+Every sentence is a decision: name the alternative that lost, or it is a forgery.
+A sentence leaves when its fork dies. The full bar lives in AGENTS.md.
+
 - One concept per doc. End-state truth: what must be TRUE when the change is done.
-- One fact per sentence. Linear sentences, no asides.
-- One grammatical template per list or table. Schema-first tables, columns padded to align raw.
-- Contract only: mechanism -> code, rationale -> PR, provenance -> git.
-- One home per fact. Cite by number everywhere else.
-- Under ~2,000 words. Sections in this order. Delete sections that don't earn their place.
+- Invariants are the decisions that constrain other decisions. Every one carries a code.
+- The Overview is the whole teaching budget. Examples sit inside the decision they illustrate.
+- One fact per sentence. One grammatical template per list or table. Columns padded to align raw.
+- One home per fact. Link to that home everywhere else.
+- Under ~2,000 words. Over it, audit the forks before splitting.
 -->
 
 # <Concept name>
@@ -22,7 +23,8 @@ The full bar: references/writing-great-specs.md. The essentials:
 
 ## Overview
 
-<Lead with one realistic example, then a field table.>
+<The smallest mental model that makes the decisions below legible. Use an example when it teaches
+faster than prose. This is the whole teaching budget.>
 
 ```json
 { "id": "chg_1A2b3C", "amount": 1099, "status": "succeeded" }
@@ -34,34 +36,36 @@ The full bar: references/writing-great-specs.md. The essentials:
 | `amount` | integer | amount in the smallest currency unit             |
 | `status` | enum    | `pending`, `succeeded`, `failed`, or `unknown`   |
 
+## Invariants
+
+<Only decisions that constrain other decisions, each naming two designs it forbids.
+Every one carries a code. Delete the section otherwise.>
+
+| code                 | Always true                                            |
+| -------------------- | ------------------------------------------------------ |
+| `CHG-AT-MOST-ONCE`   | A charge captures at most once, however many retries.  |
+
 ## Behavior
 
-<Rules as schema-first tables. Number invariants for citation. One grammatical shape per table.>
-
-| #  | Always true                                                    |
-| -- | -------------------------------------------------------------- |
-| I1 | A charge is captured at most once.                              |
-| I2 | A charge reaches exactly one terminal status and never leaves it. |
-
-<Operations as condition → outcome rows:>
+<State operations as complete condition → outcome rows. Keep local rules beside the operation.>
 
 | request                                    | outcome                                          |
 | ------------------------------------------ | ------------------------------------------------ |
 | valid `amount`, chargeable `source`        | `2xx`, one `pending` charge committed            |
 | invalid `amount`                           | `400 invalid_request`, nothing persists          |
-| same `Idempotency-Key` replayed within 24h | the original response, nothing charged twice (→ I1) |
+| same `Idempotency-Key` replayed within 24h | the original response, nothing charged twice     |
 
 ## Traces
 
 <Only for temporal contracts: the duplicate, the race, the crash. Delete otherwise.
-Steps share one shape: "actor does X. System does Y (→ I1)."->
+Steps share one shape: "actor does X. System does Y." Every trace carries a code.>
 
-**T1 — crash between debit and record**
+**CHG-CRASH-MID-CAPTURE: crash between debit and record**
 
 1. The caller creates a charge. The row commits `pending`.
 2. The processor debits the card.
 3. The service crashes before recording the outcome.
-4. Recovery marks the charge `unknown`, terminal (→ I2).
+4. Recovery marks the charge `unknown`, terminal.
 
 ## Failure semantics
 
@@ -69,7 +73,7 @@ Steps share one shape: "actor does X. System does Y (→ I1)."->
 
 ## Non-goals
 
-<What this explicitly does not do. One shape per bullet.>
+<The decisions to omit. One shape per bullet.>
 
 - Does not handle refunds. See the refunds spec.
 

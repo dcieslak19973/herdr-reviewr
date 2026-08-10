@@ -1,9 +1,8 @@
 //! Formatting comments and exporting them to the agent or clipboard.
 //!
 //! See `specs/review-model.md`. A comment becomes a block of `location`, the
-//! diff snippet, then the text. Sending never consumes a comment — `App::export`
-//! persists every open, user-authored comment and leaves it in place, so a comment
-//! stays visible (and resolvable) after being sent.
+//! diff snippet, then the text. Export is consume-on-success: the caller removes
+//! a comment only after `export` returns `Ok`.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -40,12 +39,32 @@ pub fn format_all(comments: &[&Comment]) -> String {
 pub trait ExportTarget {
     fn export(&self, text: &str) -> Result<()>;
     fn label(&self) -> &'static str;
+    /// Destination-specific confirmation shown after a successful export.
+    fn success_message(&self, count: usize) -> String;
+    /// Destination-specific line shown after a failed one. It is the whole status, so it is one
+    /// short sentence a reviewer can read, never the underlying error. The cause goes to the log.
+    fn failure_message(&self) -> String;
+}
+
+fn counted_comments(count: usize) -> String {
+    let noun = if count == 1 { "comment" } else { "comments" };
+    format!("{count} {noun}")
 }
 
 /// A clipboard tool and the args that make it read stdin into the system clipboard. Tried in
 /// order — the first one present on `PATH` wins. macOS ships `pbcopy`; Linux needs one of these
 /// installed (Wayland `wl-copy`, or X11 `xclip`/`xsel`); Windows ships `clip`. OSC 52 is
 /// roadmap.
+#[cfg(not(windows))]
+const CLIPBOARD_TOOLS: &[(&str, &[&str])] = &[
+    ("pbcopy", &[]),
+    ("wl-copy", &[]),
+    ("xclip", &["-selection", "clipboard"]),
+    ("xsel", &["--clipboard", "--input"]),
+];
+
+/// Windows twin of the list above: `clip` ships with every Windows install.
+#[cfg(windows)]
 const CLIPBOARD_TOOLS: &[(&str, &[&str])] = &[
     ("pbcopy", &[]),
     ("wl-copy", &[]),
@@ -63,10 +82,18 @@ impl ExportTarget for Clipboard {
         "clipboard"
     }
 
+    fn success_message(&self, count: usize) -> String {
+        format!("copied {}", counted_comments(count))
+    }
+
+    fn failure_message(&self) -> String {
+        "clipboard failed".to_string()
+    }
+
     fn export(&self, text: &str) -> Result<()> {
         let (cmd, args) = select_tool(CLIPBOARD_TOOLS, crate::proc::on_path).context(
             "no clipboard tool found (install wl-clipboard, xclip, or xsel) — \
-             use \"Add all to chat\" instead",
+             use Send instead",
         )?;
         let mut child = Command::new(cmd)
             .args(args)
@@ -94,28 +121,49 @@ fn select_tool(
     tools.iter().copied().find(|(cmd, _)| present(cmd))
 }
 
-/// The agent pane: fill its input via `herdr agent send`, then focus it.
-#[derive(Debug)]
-pub struct Agent;
+/// One chosen agent pane: fill its input via `herdr pane send-text`, then focus it.
+///
+/// The pane is decided before the export runs, by the sole-agent path or by the picker, and
+/// nothing re-resolves it here. A pane that closed in between fails the send and keeps every
+/// comment (`specs/herdr-host.md`).
+#[derive(Clone, Debug)]
+pub struct Agent {
+    pub pane: String,
+    pub name: String,
+}
 
 impl ExportTarget for Agent {
     fn label(&self) -> &'static str {
         "agent"
     }
 
+    /// Names the agent it addressed. The send is irreversible and consumes the whole set, so
+    /// this line is the reviewer's only record of where the review went (`specs/input.md`).
+    fn success_message(&self, count: usize) -> String {
+        format!("added {} to {}", counted_comments(count), self.name)
+    }
+
+    /// The pane was resolved before the send and closed in between, which is the only way this
+    /// happens in practice. herdr's own wording is a JSON envelope around a pane id, so the
+    /// reviewer gets this instead and the payload goes to the log.
+    fn failure_message(&self) -> String {
+        "agent not found".to_string()
+    }
+
     fn export(&self, text: &str) -> Result<()> {
-        let pane = herdr::resolve_agent_pane()?;
-        herdr::send_text(&pane, text)?;
+        herdr::send_text(&self.pane, text)?;
         // Focus is a convenience once the text is delivered; a focus failure must NOT fail the
         // export, or the comments stay unconsumed and the next Send duplicates the whole review.
-        let _ = herdr::focus(&pane);
+        let _ = herdr::focus(&self.pane);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CLIPBOARD_TOOLS, format_all, format_comment, select_tool};
+    use super::{
+        Agent, CLIPBOARD_TOOLS, Clipboard, ExportTarget, format_all, format_comment, select_tool,
+    };
     use crate::model::{Comment, Side};
 
     #[test]
@@ -132,6 +180,17 @@ mod tests {
             select_tool(CLIPBOARD_TOOLS, |c| c == "pbcopy" || c == "xclip").map(|(cmd, _)| cmd),
             Some("pbcopy")
         );
+    }
+
+    #[test]
+    fn export_confirmations_name_the_actual_result_and_pluralize_comments() {
+        // The agent line names the pane it addressed, so a mis-send is visible the moment it
+        // lands (`specs/input.md`).
+        let agent = Agent { pane: "w8:p1".into(), name: "release-bot".into() };
+        assert_eq!(agent.success_message(1), "added 1 comment to release-bot");
+        assert_eq!(agent.success_message(2), "added 2 comments to release-bot");
+        assert_eq!(Clipboard.success_message(1), "copied 1 comment");
+        assert_eq!(Clipboard.success_message(2), "copied 2 comments");
     }
 
     fn comment(file: &str, side: Side, start: u32, end: u32, lines: &str, text: &str) -> Comment {

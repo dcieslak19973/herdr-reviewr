@@ -67,22 +67,27 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 install -m 0755 "$tmp/$NAME" "$BIN_DIR/$NAME"
 echo "$NAME: installed $BIN_DIR/$NAME"
 
-# Link the binary onto PATH so `herdr-reviewr ...` works directly in a shell (the sidebar pane
-# and actions never need this — they invoke $HERDR_PLUGIN_ROOT/bin/herdr-reviewr by absolute
-# path — but users and agents following the docs expect the bare command to work). This step
-# never fails the install; a broken $HOME or a read-only ~/.local/bin just means no symlink.
-LOCAL_BIN="${HOME:-}/.local/bin"
-if [ -n "${HOME:-}" ] && mkdir -p "$LOCAL_BIN" 2>/dev/null && ln -sf "$BIN_DIR/$NAME" "$LOCAL_BIN/$NAME" 2>/dev/null; then
-  echo "$NAME: linked $LOCAL_BIN/$NAME -> $BIN_DIR/$NAME"
-  case ":$PATH:" in
-    *":$LOCAL_BIN:"*) ;;
-    *)
-      echo "$NAME: $LOCAL_BIN is not on PATH — add it to run '$NAME' directly:" >&2
-      echo "  export PATH=\"$LOCAL_BIN:\$PATH\"" >&2
-      ;;
-  esac
-else
-  echo "$NAME: could not link $LOCAL_BIN/$NAME (non-fatal) — run via $BIN_DIR/$NAME instead" >&2
+# Stable launch paths (specs/herdr-host.md, Install paths): symlinks into the installed
+# plugin, never copies, so a launch after an uninstall fails loudly instead of running a
+# stale build. An existing symlink re-points on every install — the hash-suffixed plugin
+# root moves — but anything else at the path is left alone: a user's own binary there
+# (`cargo install --root ~/.local`) must survive, and `ln -sfn` onto a real directory
+# would nest inside it. The binary is already installed, so a skipped or failed link
+# warns without failing the install. This build may run in a staging checkout herdr
+# renames afterwards, so the links aim at the runtime root when herdr provides one, and
+# every action re-points them at the live root regardless (herdr/pane.sh).
+LINK_ROOT="${HERDR_PLUGIN_ROOT:-$ROOT}"
+link_binary() {
+  if mkdir -p "$1" 2>/dev/null && { [ -L "$1/$NAME" ] || [ ! -e "$1/$NAME" ]; } &&
+    ln -sfn "$LINK_ROOT/bin/$NAME" "$1/$NAME" 2>/dev/null; then
+    echo "$NAME: linked $1/$NAME"
+  else
+    echo "$NAME: warning: could not link $1/$NAME" >&2
+  fi
+}
+link_binary "$HOME/.local/state/herdr/plugins/dcieslak19973.reviewr/bin"
+if [ -d "$HOME/.local/bin" ]; then
+  link_binary "$HOME/.local/bin"
 fi
 
 # Post-install next steps: printed to stdout on success only, never affects exit status.

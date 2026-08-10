@@ -152,8 +152,9 @@ pub fn run(args: &[String]) -> ExitCode {
 
     // Validate the whole plugin config before reading workspace state or taking any action.
     // A config error is loud for every mode, including the event — herdr's plugin log is
-    // where a broken config.toml gets noticed (tests/sidebar.rs pins this).
-    let cfg = match crate::config::plugin_config() {
+    // where a broken config.toml gets noticed.
+    let dir = crate::config::resolve_config_dir(crate::herdr::plugin_config_dir);
+    let cfg = match crate::config::plugin_config(dir.as_deref()) {
         Ok(cfg) => cfg,
         Err(error) => {
             eprintln!("reviewr: {error}");
