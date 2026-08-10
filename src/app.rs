@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+use crate::comments;
 use crate::diff::{DiffCache, FileDiff, Row, View};
 use crate::export::{Agent, ExportTarget, format_all};
 use crate::file_list::{self, Annotation, Entry, RowKind};
@@ -409,6 +410,10 @@ pub enum FooterAction {
     Refresh,
     Tabs,
     Quit,
+    /// Flip the open/resolved status of the targeted comment, any author.
+    ResolveComment,
+    /// Hide (or show) every resolved comment's inline card.
+    HideResolved,
 }
 
 /// Where a footer action sits: on row 1 (`Primary`, `Send`, or a `Do` cursor action), or in one of
@@ -539,6 +544,28 @@ pub struct App {
     divider_drag: DividerDrag,
     pub select_anchor: Option<usize>,
     pub store: CommentStore,
+    /// Session lifecycle metadata for each `store` entry, index-parallel with `store.iter()`:
+    /// every reviewer comment is assigned a disk-shaped id and creation timestamp the moment
+    /// it is written, so a later `Immediate`-mode persist or an `s`-time `OnSend` persist
+    /// always writes under the same id — a re-put never creates a duplicate disk entry
+    /// (`specs/agent-comments-design.md` TUI/Send).
+    comment_meta: Vec<CommentMeta>,
+    /// The on-disk comment store for this repo; `None` when it could not be resolved (a
+    /// non-repo path, or a git failure) — comments then stay TUI-local for the session and
+    /// `status` carries a one-line notice (`specs/agent-comments-design.md` Error handling).
+    comments_disk: Option<comments::Store>,
+    /// The last observed `comments::Store::signature()`, compared on the poll tick to detect
+    /// an out-of-band write (the agent CLI, another session) — `specs/agent-comments-design.md`
+    /// TUI/"Load and watch".
+    comments_signature: u64,
+    /// Agent-authored comments currently on disk. Never edited or deleted from the TUI —
+    /// resolve (`specs/agent-comments-design.md` TUI/Keys) is the only action available on
+    /// one — and never part of `store`, which holds only the reviewer's own drafts.
+    pub agent_comments: Vec<comments::StoredComment>,
+    /// Whether the diff pane's inline cards (and the cursor's comment targeting) skip
+    /// resolved comments, any author. The comments-list overlay always shows every one of
+    /// the reviewer's own drafts regardless, since it is the only surface that can reopen one.
+    pub hide_resolved: bool,
     pub list_cursor: usize,
     /// The picker's rows, frozen at the moment it opened. A refresh behind it adds, drops,
     /// and reorders nothing (`specs/herdr-host.md`).
@@ -636,6 +663,38 @@ pub struct App {
     agents_present: Option<bool>,
 }
 
+/// Session lifecycle metadata for one `store` entry — see [`App::comment_meta`].
+#[derive(Debug, Clone)]
+struct CommentMeta {
+    id: String,
+    created_at: String,
+    status: comments::Status,
+    /// Whether this comment has been written to `comments_disk` at least once (an
+    /// `Immediate`-mode save, or an `OnSend` comment that has since been sent).
+    persisted: bool,
+}
+
+impl CommentMeta {
+    fn fresh() -> Self {
+        Self {
+            id: comments::new_id(),
+            created_at: comments::now_iso(),
+            status: comments::Status::Open,
+            persisted: false,
+        }
+    }
+}
+
+/// A comment the reviewer's cursor or the list overlay's highlight targets, spanning both the
+/// reviewer's own drafts (`store`, index-addressed) and a synced-in agent comment
+/// (`agent_comments`, index-addressed) — the one type resolve/reopen acts on regardless of
+/// author (`specs/agent-comments-design.md` TUI/Keys).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CommentTarget {
+    User(usize),
+    Agent(usize),
+}
+
 /// One painted link region: `x_start..x_end` on screen row `y`, in absolute cells.
 #[derive(Clone, Debug)]
 struct PaintedLink {
@@ -662,12 +721,23 @@ impl App {
     }
 
     fn build(repo: PathBuf, scope: Scope, base: Option<String>, load_turn: bool) -> Self {
+        // `blocked` (load_turn = false) is the error-only pane and must never touch the
+        // filesystem, so its comment store stays unresolved, matching every other
+        // repo-reading field left unset below.
+        let (comments_disk, comments_disk_error) = if load_turn {
+            match comments::Store::open(&repo) {
+                Ok(store) => (Some(store), None),
+                Err(e) => (None, Some(e.to_string())),
+            }
+        } else {
+            (None, None)
+        };
         // Mirror any persisted turn baseline for this worktree, so `last-turn` keeps its
         // anchor across a reviewr pane restart. The worker's `TurnHost` owns the tracker; this
         // mirror follows its completions (specs/herdr-host.md).
         let turn_baseline = if load_turn { crate::world::seed_baseline(&repo) } else { None };
         let theme = theme::resolve(None);
-        Self {
+        let mut app = Self {
             repo,
             base,
             branch_base: git::BaseStatus::default(),
@@ -712,6 +782,11 @@ impl App {
             divider_drag: DividerDrag::Idle,
             select_anchor: None,
             store: CommentStore::new(),
+            comment_meta: Vec::new(),
+            comments_disk,
+            comments_signature: 0,
+            agent_comments: Vec::new(),
+            hide_resolved: false,
             list_cursor: 0,
             picker_rows: Vec::new(),
             picker_cursor: 0,
@@ -752,7 +827,17 @@ impl App {
             markdown_cache: std::cell::RefCell::new(crate::markdown::RenderCache::default()),
             turn_baseline,
             agents_present: None,
+        };
+        // Adopt whatever is already on disk (a prior session's `Immediate`-mode comments, or
+        // an agent's) before the first frame — `comment_meta` is empty on a fresh app, so this
+        // only ever populates `agent_comments` and the signature; a later config-recovery
+        // carry brings the reviewer's own drafts in over it (`carry_authored_state_from`).
+        if app.comments_disk.is_some() {
+            app.sync_comments_from_disk();
+        } else if let Some(e) = comments_disk_error {
+            app.status = format!("comment store unavailable — comments are session-local ({e})");
         }
+        app
     }
 
     /// Resolve `name` (a CLI or config value; `None` = default) and apply it when it changes:
@@ -841,6 +926,8 @@ impl App {
     /// against, matching the ordinary refresh invariant.
     pub(crate) fn carry_authored_state_from(&mut self, old: &mut Self) {
         self.store = std::mem::take(&mut old.store);
+        self.comment_meta = std::mem::take(&mut old.comment_meta);
+        self.hide_resolved = old.hide_resolved;
         self.list_cursor = old.list_cursor;
         // The footer expansion is one global toggle, carried regardless of the recovered mode
         // (`specs/input.md`).
@@ -2816,12 +2903,15 @@ impl App {
             Some(i) => {
                 logln!("comment edit [{i}] :: {text}");
                 self.store.edit(i, text);
+                self.persist_if_immediate(i);
                 self.status = "comment updated".to_string();
             }
             None => {
                 if let Some(c) = self.build_comment(text) {
                     logln!("comment add {} :: {}", c.location(), c.text);
-                    self.store.add(c);
+                    let i = self.store.add(c);
+                    self.comment_meta.push(CommentMeta::fresh());
+                    self.persist_if_immediate(i);
                     self.status = "comment added".to_string();
                 }
             }
@@ -2891,7 +2981,9 @@ impl App {
         c.diff_anchored == (self.diff.view == View::Diff)
     }
 
-    /// Row indices on the open diff's file that a comment anchors to.
+    /// Row indices on the open diff's file that a comment anchors to, either author — the
+    /// gutter marker and `n`/`N` jump both read this, so a synced-in agent comment is exactly
+    /// as reachable as the reviewer's own.
     pub fn commented_lines(&self) -> HashSet<usize> {
         let Some(file) = self.diff_path.clone() else {
             return HashSet::new();
@@ -2900,9 +2992,12 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, row)| {
-                self.store
-                    .iter()
-                    .any(|c| c.file == file && self.comment_in_view(c) && line_in(c, row))
+                self.store.iter().any(|c| c.file == file && self.comment_in_view(c) && line_in(c, row))
+                    || self.agent_comments.iter().any(|sc| {
+                        sc.comment.file == file
+                            && self.comment_in_view(&sc.comment)
+                            && line_in(&sc.comment, row)
+                    })
             })
             .map(|(i, _)| i)
             .collect()
@@ -2925,6 +3020,29 @@ impl App {
         cards
     }
 
+    /// Agent-comment counterpart to [`Self::comment_cards`]: for each visible diff row, the
+    /// `agent_comments` indices whose card renders after it.
+    pub fn agent_comment_cards(&self) -> Vec<Vec<usize>> {
+        let mut cards = vec![Vec::new(); self.visible.len()];
+        let Some(file) = self.diff_path.as_deref() else { return cards };
+        for (ci, sc) in self.agent_comments.iter().enumerate() {
+            if sc.comment.file == file
+                && self.comment_in_view(&sc.comment)
+                && let Some(last) = self.visible.iter().rposition(|row| line_in(&sc.comment, row))
+            {
+                cards[last].push(ci);
+            }
+        }
+        cards
+    }
+
+    /// Whether the `store` comment at `index` is resolved — the card renderer's and the
+    /// footer's one source, since `store` itself carries no lifecycle state.
+    #[must_use]
+    pub fn comment_resolved(&self, index: usize) -> bool {
+        self.comment_meta.get(index).is_some_and(|m| m.status == comments::Status::Resolved)
+    }
+
     /// The store index to act on: the comment under the diff cursor, or — in the
     /// list overlay — the highlighted row.
     fn target_comment(&self) -> Option<usize> {
@@ -2941,6 +3059,39 @@ impl App {
         self.store.iter().position(|c| c.file == file && self.comment_in_view(c) && line_in(c, row))
     }
 
+    /// The `agent_comments` index of a comment whose range covers the current diff row, if
+    /// any, honoring `hide_resolved` — a hidden card is not a valid cursor target either.
+    fn agent_comment_under_cursor(&self) -> Option<usize> {
+        let file = self.diff_path.as_deref()?;
+        let row = self.visible.get(self.diff_cursor)?;
+        self.agent_comments.iter().position(|sc| {
+            sc.comment.file == file
+                && self.comment_in_view(&sc.comment)
+                && line_in(&sc.comment, row)
+                && (!self.hide_resolved || sc.status == comments::Status::Open)
+        })
+    }
+
+    /// The comment the diff cursor targets, either author — the reviewer's own draft when
+    /// [`Self::comment_under_cursor`] finds one, else a synced-in agent comment.
+    fn comment_ref_under_cursor(&self) -> Option<CommentTarget> {
+        if let Some(i) = self.comment_under_cursor() {
+            return Some(CommentTarget::User(i));
+        }
+        self.agent_comment_under_cursor().map(CommentTarget::Agent)
+    }
+
+    /// The comment [`Self::resolve_selected_comment`] acts on: the list overlay's highlighted
+    /// row (the reviewer's own drafts only — agent comments never enter it) while `Mode::List`
+    /// is open, else whichever comment the diff cursor rests on, any author.
+    fn resolve_target(&self) -> Option<CommentTarget> {
+        if self.mode == Mode::List {
+            return (self.list_cursor < self.store.len())
+                .then_some(CommentTarget::User(self.list_cursor));
+        }
+        self.comment_ref_under_cursor()
+    }
+
     pub fn delete_comment(&mut self) {
         // Cards don't show in the preview: `d` only acts through the comments-list overlay.
         if self.preview_active() && self.mode != Mode::List {
@@ -2949,6 +3100,12 @@ impl App {
         if let Some(i) = self.target_comment() {
             logln!("comment delete [{i}]");
             self.store.take(i);
+            if i < self.comment_meta.len() {
+                let meta = self.comment_meta.remove(i);
+                if meta.persisted {
+                    self.remove_from_disk(&meta.id);
+                }
+            }
             self.clamp_list_cursor();
             self.status = "comment deleted".to_string();
             // Don't strand the user in an empty "Comments (0)" overlay, matching `export`.
@@ -3364,6 +3521,8 @@ impl App {
                     (A::Copy, Do),
                     (A::EditComment, Do),
                     (A::DeleteComment, Do),
+                    (A::ResolveComment, Do),
+                    (A::HideResolved, Do),
                 ];
             }
             Mode::Picker => {
@@ -3473,10 +3632,19 @@ impl App {
         } else if self.select_anchor.is_some() {
             out.push((A::Comment, Primary));
             out.push((A::ClearSelection, Do));
-        } else if self.comment_under_cursor().is_some() {
-            out.push((A::EditComment, Primary));
-            out.push((A::DeleteComment, Do));
-            out.push((A::JumpComment, Do));
+        } else if let Some(target) = self.comment_ref_under_cursor() {
+            match target {
+                CommentTarget::User(_) => {
+                    out.push((A::EditComment, Primary));
+                    out.push((A::DeleteComment, Do));
+                    out.push((A::ResolveComment, Do));
+                    out.push((A::JumpComment, Do));
+                }
+                CommentTarget::Agent(_) => {
+                    out.push((A::ResolveComment, Primary));
+                    out.push((A::JumpComment, Do));
+                }
+            }
         } else {
             out.push((A::Comment, Primary));
             out.push((A::Select, Do));
@@ -3518,6 +3686,9 @@ impl App {
             out.push((A::Find, Go));
         }
         out.push((A::Wrap, Go));
+        if !self.store.is_empty() || !self.agent_comments.is_empty() {
+            out.push((A::HideResolved, Go));
+        }
         if !self.store.is_empty() {
             out.push((A::List, Go));
             out.push((A::Copy, Go));
@@ -3759,6 +3930,13 @@ impl App {
             self.status = "no comments to send".to_string();
             return false;
         }
+        // Persist every draft not yet on disk — the on-send commit point when `comment_sync`
+        // is `OnSend`; a harmless idempotent re-put for one already `Immediate`-persisted,
+        // writing under the same disk id either way, so a send never duplicates a store entry
+        // (`specs/agent-comments-design.md` TUI/Send).
+        for i in 0..self.store.len() {
+            self.persist_if_unpersisted(i);
+        }
         let refs: Vec<&Comment> = self.store.iter().collect();
         let text = format_all(&refs);
         let n = refs.len();
@@ -3766,6 +3944,7 @@ impl App {
         let delivered = match target.export(&text) {
             Ok(()) => {
                 self.store.take_all();
+                self.comment_meta.clear();
                 self.status = target.success_message(n);
                 logln!("export OK");
                 true
@@ -3812,6 +3991,174 @@ impl App {
         if self.list_cursor >= self.store.len() {
             self.list_cursor = self.store.len().saturating_sub(1);
         }
+    }
+
+    /// Whether `comment_sync` currently commits every reviewer write straight to disk
+    /// (`Immediate`) or holds it in the session until `s` (`OnSend`).
+    fn immediate_sync(&self) -> bool {
+        self.plugin_config()
+            .is_some_and(|c| c.comment_sync() == crate::config::CommentSync::Immediate)
+    }
+
+    /// Persist the `store` comment at `index` when `comment_sync` is `Immediate`; a no-op
+    /// (kept memory-only until `s`) in `OnSend` mode.
+    fn persist_if_immediate(&mut self, index: usize) {
+        if self.immediate_sync() {
+            self.persist(index);
+        }
+    }
+
+    /// Persist the `store` comment at `index` if it has never been written to disk. `export`'s
+    /// on-send commit point: a no-op for one an `Immediate` save already wrote.
+    fn persist_if_unpersisted(&mut self, index: usize) {
+        if !self.comment_meta.get(index).is_some_and(|m| m.persisted) {
+            self.persist(index);
+        }
+    }
+
+    /// Write the `store` comment at `index` to disk under its lifecycle id, recording it as
+    /// persisted. Logs and no-ops on failure or without a resolved store — persistence never
+    /// blocks or reverts the in-memory edit (`specs/agent-comments-design.md` Error handling).
+    fn persist(&mut self, index: usize) {
+        let Some(store) = &self.comments_disk else { return };
+        let Some(comment) = self.store.get(index) else { return };
+        let Some(meta) = self.comment_meta.get(index) else { return };
+        let sc = comments::StoredComment {
+            id: meta.id.clone(),
+            author: comments::Author::User,
+            status: meta.status,
+            created_at: meta.created_at.clone(),
+            comment: comment.clone(),
+        };
+        match store.put(&sc) {
+            Ok(()) => {
+                self.comment_meta[index].persisted = true;
+                self.comments_signature = store.signature();
+            }
+            Err(e) => logln!("comment persist failed: {e}"),
+        }
+    }
+
+    /// Delete `id` from disk, if resolved. Logs and no-ops on failure.
+    fn remove_from_disk(&mut self, id: &str) {
+        let Some(store) = &self.comments_disk else { return };
+        match store.remove(id) {
+            Ok(_) => self.comments_signature = store.signature(),
+            Err(e) => logln!("comment remove failed: {e}"),
+        }
+    }
+
+    /// `K`: flip the open/resolved status of the targeted comment — the list overlay's
+    /// highlighted row while it is open, else whatever the diff cursor rests on, any author
+    /// (`specs/agent-comments-design.md` TUI/Keys).
+    pub fn resolve_selected_comment(&mut self) {
+        if self.preview_active() && self.mode != Mode::List {
+            return; // no cursor and no cards in the preview (specs/diff-view.md)
+        }
+        match self.resolve_target() {
+            Some(CommentTarget::User(i)) => self.toggle_user_resolved(i),
+            Some(CommentTarget::Agent(i)) => self.toggle_agent_resolved(i),
+            None => {}
+        }
+    }
+
+    fn toggle_user_resolved(&mut self, index: usize) {
+        let Some(meta) = self.comment_meta.get_mut(index) else { return };
+        let next = match meta.status {
+            comments::Status::Open => comments::Status::Resolved,
+            comments::Status::Resolved => comments::Status::Open,
+        };
+        meta.status = next;
+        if meta.persisted {
+            let id = meta.id.clone();
+            if let Some(store) = &self.comments_disk {
+                match store.set_status(&id, next) {
+                    Ok(_) => self.comments_signature = store.signature(),
+                    Err(e) => logln!("comment resolve failed: {e}"),
+                }
+            }
+        }
+        self.status =
+            if next == comments::Status::Resolved { "comment resolved" } else { "comment reopened" }
+                .to_string();
+    }
+
+    fn toggle_agent_resolved(&mut self, index: usize) {
+        let Some(sc) = self.agent_comments.get(index) else { return };
+        let next = match sc.status {
+            comments::Status::Open => comments::Status::Resolved,
+            comments::Status::Resolved => comments::Status::Open,
+        };
+        let id = sc.id.clone();
+        let Some(store) = &self.comments_disk else { return };
+        match store.set_status(&id, next) {
+            Ok(_) => {
+                self.comments_signature = store.signature();
+                // Pick up the flip immediately rather than waiting for the next poll tick, so
+                // the card's dim/hide state reflects the press that caused it.
+                self.sync_comments_from_disk();
+            }
+            Err(e) => logln!("comment resolve failed: {e}"),
+        }
+        self.status =
+            if next == comments::Status::Resolved { "comment resolved" } else { "comment reopened" }
+                .to_string();
+    }
+
+    /// `H`: hide (or show) every resolved comment's inline card, any author.
+    pub fn toggle_hide_resolved(&mut self) {
+        self.hide_resolved = !self.hide_resolved;
+    }
+
+    /// Re-sync from the on-disk comment store when its change signature has moved since the
+    /// last check — an external write (the CLI, another session) shows up on the next poll
+    /// tick without the reviewer doing anything (`lib.rs`, `specs/agent-comments-design.md`
+    /// TUI/"Load and watch"). A no-op with no disk store.
+    pub fn check_comment_store(&mut self) {
+        let Some(store) = &self.comments_disk else { return };
+        if store.signature() != self.comments_signature {
+            self.sync_comments_from_disk();
+        }
+    }
+
+    /// Reload `agent_comments` in full from disk, and reconcile the reviewer's own drafts
+    /// against it: disk wins for a comment this session has already persisted (an external
+    /// resolve, or its own `Immediate` write reflected back); a persisted id disk no longer
+    /// has was removed externally and drops from the session; a draft never yet persisted (an
+    /// `on-send` comment awaiting `s`) is untouched, since disk has no opinion on it yet — "a
+    /// comment is never lost to a refresh" (`specs/overview.md`).
+    fn sync_comments_from_disk(&mut self) {
+        let Some(store) = &self.comments_disk else { return };
+        let disk = store.load();
+        self.comments_signature = store.signature();
+        self.agent_comments =
+            disk.iter().filter(|sc| sc.author == comments::Author::Agent).cloned().collect();
+        if self.comment_meta.is_empty() {
+            return; // nothing of the reviewer's to reconcile
+        }
+        let by_id: HashMap<&str, &comments::StoredComment> =
+            disk.iter().map(|sc| (sc.id.as_str(), sc)).collect();
+        let drained = self.store.take_all();
+        let metas = std::mem::take(&mut self.comment_meta);
+        for (comment, meta) in drained.into_iter().zip(metas) {
+            if meta.persisted {
+                if let Some(sc) = by_id.get(meta.id.as_str()) {
+                    self.store.add(sc.comment.clone());
+                    self.comment_meta.push(CommentMeta {
+                        id: meta.id,
+                        created_at: meta.created_at,
+                        status: sc.status,
+                        persisted: true,
+                    });
+                }
+                // else: removed externally (an agent, or another session) — dropped, never
+                // resurrected.
+            } else {
+                self.store.add(comment);
+                self.comment_meta.push(meta);
+            }
+        }
+        self.list_cursor = self.list_cursor.min(self.store.len().saturating_sub(1));
     }
 }
 

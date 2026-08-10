@@ -1249,6 +1249,143 @@ fn send_consumes_the_whole_set() {
 }
 
 #[test]
+fn immediate_mode_persists_comments_to_the_store() {
+    // `comment_sync` defaults to `Immediate`: a saved comment writes straight to disk.
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "address this");
+
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    let saved = store.load();
+    assert_eq!(saved.len(), 1, "the comment is written to disk on save: {saved:?}");
+    assert_eq!(saved[0].author, herdr_reviewr::comments::Author::User);
+    assert_eq!(saved[0].comment.text, "address this");
+    assert_eq!(saved[0].status, herdr_reviewr::comments::Status::Open);
+
+    // The comment still lives in the TUI list too — `Immediate` mirrors, it never moves.
+    assert_eq!(app.store.len(), 1);
+}
+
+#[test]
+fn on_send_mode_persists_only_on_send() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("config.toml"), "comment_sync = \"on-send\"\n").unwrap();
+    let config = herdr_reviewr::config::plugin_config_in(dir.path()).unwrap();
+
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    app.set_plugin_config(config);
+    comment_on(&mut app, '+', "hold until sent");
+
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    assert!(store.load().is_empty(), "an on-send comment stays TUI-local until `s`");
+
+    app.export(&FakeTarget::ok());
+    let saved = store.load();
+    assert_eq!(saved.len(), 1, "send persists the on-send draft: {saved:?}");
+    assert_eq!(saved[0].comment.text, "hold until sent");
+    assert_eq!(saved[0].status, herdr_reviewr::comments::Status::Open, "still open after send");
+    assert!(app.store.is_empty(), "send still consumes the reviewer's local list");
+}
+
+#[test]
+fn send_does_not_duplicate_an_already_persisted_comment() {
+    // Immediate mode already wrote the comment on save; `s` must re-put under the same id,
+    // not create a second disk entry (`specs/agent-comments-design.md` TUI/Send).
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    comment_on(&mut app, '+', "one");
+
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    assert_eq!(store.load().len(), 1);
+
+    app.export(&FakeTarget::ok());
+    assert_eq!(store.load().len(), 1, "send never duplicates a store entry");
+}
+
+#[test]
+fn external_agent_comment_appears_after_tick() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    assert!(app.agent_comments.is_empty());
+
+    // Simulate the agent CLI writing a comment mid-session, straight to the same store.
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    let comment = herdr_reviewr::model::Comment {
+        file: "a.rs".to_string(),
+        side: Side::New,
+        start: 1,
+        end: 1,
+        lines: "+alpha".to_string(),
+        text: "left a note".to_string(),
+        diff_anchored: true,
+    };
+    store.add(herdr_reviewr::comments::Author::Agent, &comment).unwrap();
+
+    // The poll tick's cheap directory-stat check picks it up without user action.
+    app.check_comment_store();
+    assert_eq!(app.agent_comments.len(), 1, "the external comment appears after the tick check");
+    assert_eq!(app.agent_comments[0].comment.text, "left a note");
+    assert_eq!(app.agent_comments[0].author, herdr_reviewr::comments::Author::Agent);
+}
+
+#[test]
+fn resolving_an_agent_comment_from_the_diff_cursor_updates_disk() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    let comment = herdr_reviewr::model::Comment {
+        file: "a.rs".to_string(),
+        side: Side::New,
+        start: 2,
+        end: 2,
+        lines: "+BETA".to_string(),
+        text: "left a note".to_string(),
+        diff_anchored: true,
+    };
+    let stored = store.add(herdr_reviewr::comments::Author::Agent, &comment).unwrap();
+    app.check_comment_store();
+    assert_eq!(app.agent_comments.len(), 1);
+
+    app.focus = Focus::Diff;
+    app.diff_cursor = row_with(&app, '+');
+    app.resolve_selected_comment();
+
+    assert_eq!(app.agent_comments[0].status, herdr_reviewr::comments::Status::Resolved);
+    let saved = store.load();
+    let on_disk = saved.iter().find(|sc| sc.id == stored.id).expect("still on disk");
+    assert_eq!(on_disk.status, herdr_reviewr::comments::Status::Resolved, "the flip reaches disk");
+
+    // Toggling again reopens it, both in memory and on disk.
+    app.resolve_selected_comment();
+    assert_eq!(app.agent_comments[0].status, herdr_reviewr::comments::Status::Open);
+    let saved = store.load();
+    let on_disk = saved.iter().find(|sc| sc.id == stored.id).expect("still on disk");
+    assert_eq!(on_disk.status, herdr_reviewr::comments::Status::Open);
+}
+
+#[test]
+fn default_keys_resolve_and_hide_resolved_via_the_dispatcher() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    let keymap = Keymap::default();
+    comment_on(&mut app, '+', "note");
+    app.focus = Focus::Diff;
+    app.diff_cursor = row_with(&app, '+');
+
+    press(&mut app, &keymap, KeyCode::Char('K'));
+    assert!(app.comment_resolved(0), "`K` resolves the targeted comment");
+    press(&mut app, &keymap, KeyCode::Char('K'));
+    assert!(!app.comment_resolved(0), "`K` again reopens it");
+
+    press(&mut app, &keymap, KeyCode::Char('K'));
+    press(&mut app, &keymap, KeyCode::Char('H'));
+    assert!(app.hide_resolved, "`H` hides resolved comments");
+    press(&mut app, &keymap, KeyCode::Char('H'));
+    assert!(!app.hide_resolved, "`H` again shows them");
+}
+
+#[test]
 fn a_comment_of_only_blank_lines_is_cancelled() {
     let r = edited_repo();
     let mut app = app_on(&r);

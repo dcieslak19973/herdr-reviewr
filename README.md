@@ -1,8 +1,8 @@
 # herdr-reviewr
 
-[![CI](https://github.com/persiyanov/herdr-reviewr/actions/workflows/ci.yml/badge.svg)](https://github.com/persiyanov/herdr-reviewr/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/persiyanov/herdr-reviewr)](https://github.com/persiyanov/herdr-reviewr/releases/latest)
-[![License](https://img.shields.io/github/license/persiyanov/herdr-reviewr)](LICENSE)
+[![CI](https://github.com/dcieslak19973/herdr-reviewr/actions/workflows/ci.yml/badge.svg)](https://github.com/dcieslak19973/herdr-reviewr/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/dcieslak19973/herdr-reviewr)](https://github.com/dcieslak19973/herdr-reviewr/releases/latest)
+[![License](https://img.shields.io/github/license/dcieslak19973/herdr-reviewr)](LICENSE)
 
 <p align="center">
   <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="#controls">controls</a> · <a href="#diff-scopes">scopes</a> · <a href="#configuration">configuration</a> · <a href="#limitations">limitations</a> · <a href="CHANGELOG.md">changelog</a>
@@ -26,30 +26,47 @@ One persistent pane, pointed at a git worktree:
 - **Markdown preview** — flip a `.md` file between source and rendered view.
 - **Themes** — 18 palettes in dark and light.
 
-It never edits your worktree and sends nothing on its own. Its only git writes are private
-refs under `refs/reviewr/`: the turn baseline and the base pick. The **PR** tab reads GitHub,
-GitLab, or Azure DevOps and never posts.
+It never edits your worktree and sends nothing on its own. Its only git writes are under the
+repo's git dir: the private `refs/reviewr/` refs (turn baseline and base pick) and the agent-
+comment store (`<git-dir>/reviewr/comments/`). The **PR** tab reads GitHub, GitLab, Azure
+DevOps, or a self-hosted Bitbucket Data Center and never posts.
+
+## Fork additions
+
+This is the [`dcieslak19973/herdr-reviewr`](https://github.com/dcieslak19973/herdr-reviewr) fork
+of [`persiyanov/herdr-reviewr`](https://github.com/persiyanov/herdr-reviewr), tracking upstream
+and adding:
+
+- **Agent comments.** A worktree-scoped persistent comment store both the reviewer and the coding
+  agent read and write. The agent uses `herdr-reviewr comment add|list|resolve|rm` (and installs
+  the bundled skill with `herdr-reviewr skill-install`); the reviewer sees agent notes as cards in
+  the diff and resolves them. `comment_sync = "immediate"` (default) or `"on-send"` controls when
+  your own comments persist. See "Working with agents" below.
+- **Bitbucket Data Center.** Set `bitbucket_host = "bitbucket.example.com"` and the **PR** tab reads
+  its pull requests over the REST API (`curl` + git-credential or `BITBUCKET_TOKEN`).
+- **Windows.** A native Windows build (`x86_64-pc-windows-msvc`), installed via `herdr/install.ps1`,
+  with a PowerShell-driven manifest.
 
 ## Requirements
 
 - **herdr ≥ 0.7.5** (the plugin system).
 - **git** on `PATH`.
 - A **truecolor** terminal with Unicode box-drawing.
-- **macOS or Linux.**
-- **`gh`** (GitHub), **`glab`** (GitLab), or **`az`** (Azure DevOps, with the `azure-devops` extension), authenticated. Only the **PR** tab needs one.
+- **macOS, Linux, or Windows.**
+- **`gh`** (GitHub), **`glab`** (GitLab), **`az`** (Azure DevOps, with the `azure-devops` extension), or **`curl`** + a Bitbucket credential/`BITBUCKET_TOKEN` (Bitbucket Data Center), authenticated. Only the **PR** tab needs one.
 
 ## Install
 
 Prebuilt binaries, no Rust toolchain needed:
 
 ```bash
-herdr plugin install persiyanov/herdr-reviewr
+herdr plugin install dcieslak19973/herdr-reviewr
 ```
 
 Open it in the current workspace:
 
 ```bash
-herdr plugin action invoke open --plugin persiyanov.reviewr
+herdr plugin action invoke open --plugin dcieslak19973.reviewr
 ```
 
 reviewr auto-opens in new worktrees. `auto_open = false` keeps it hidden until you ask
@@ -58,11 +75,11 @@ reviewr auto-opens in new worktrees. `auto_open = false` keeps it hidden until y
 **To update**, reinstall. Your config is keyed by plugin id and survives:
 
 ```bash
-herdr plugin uninstall persiyanov.reviewr && herdr plugin install persiyanov/herdr-reviewr
+herdr plugin uninstall dcieslak19973.reviewr && herdr plugin install dcieslak19973/herdr-reviewr
 ```
 
 **Without herdr**, reviewr runs as a plain terminal app. Grab a
-[release binary](https://github.com/persiyanov/herdr-reviewr/releases/latest) and point it at a
+[release binary](https://github.com/dcieslak19973/herdr-reviewr/releases/latest) and point it at a
 repo:
 
 ```bash
@@ -90,7 +107,7 @@ For a shortcut, bind a key to the toggle in your herdr config (user config, not 
 [[keys.command]]
 key = "cmd+r"
 type = "plugin_action"
-command = "persiyanov.reviewr.toggle"   # <plugin_id>.<action_id> — note the id, not the name
+command = "dcieslak19973.reviewr.toggle"   # <plugin_id>.<action_id> — note the id, not the name
 ```
 
 `cmd+…` chords reach herdr. Many macOS terminals swallow `alt+…` themselves.
@@ -201,7 +218,7 @@ CLI flags on the pane command:
 Everything else lives in reviewr's config file:
 
 ```text
-~/.config/herdr/plugins/config/persiyanov.reviewr/config.toml
+~/.config/herdr/plugins/config/dcieslak19973.reviewr/config.toml
 ```
 
 Create it if missing. It is reviewr's file. Settings in herdr's `~/.config/herdr/config.toml`
@@ -392,19 +409,19 @@ command = "herdr-reviewr"
 That pane is a full reviewr pane. It reads your config, sends to agents, tracks turns, and the
 toggle closes it. The install links the binary at `~/.local/bin/herdr-reviewr` when that
 directory exists, and always at
-`~/.local/state/herdr/plugins/persiyanov.reviewr/bin/herdr-reviewr`. Use the long path if
+`~/.local/state/herdr/plugins/dcieslak19973.reviewr/bin/herdr-reviewr`. Use the long path if
 `~/.local/bin` is not on your `PATH`. The install creates both links, and every toggle, open,
 or close re-points them at the live plugin — linked dev checkouts included.
 
 A layout hook can also invoke the actions, once its panes are in place:
 
 ```bash
-herdr plugin action invoke open --plugin persiyanov.reviewr
+herdr plugin action invoke open --plugin dcieslak19973.reviewr
 ```
 
 `open` ignores `auto_open`. An explicit call is you asking. It does nothing when a reviewr pane
 is already open, so a layout can run it on every pass. `close` does nothing when none is open.
-Invoke them as `persiyanov.reviewr.open` and `persiyanov.reviewr.close`. The action targets the
+Invoke them as `dcieslak19973.reviewr.open` and `dcieslak19973.reviewr.close`. The action targets the
 focused workspace, so invoke it while the new workspace has focus. Put `herdr-reviewr` itself in
 a layout pane, never the invoke. A pane whose command is the invoke exits when the invoke
 returns.
@@ -466,7 +483,7 @@ own build inside herdr panes, link the checkout. `herdr plugin link` runs the bi
 at `bin/herdr-reviewr`:
 
 ```bash
-git clone https://github.com/persiyanov/herdr-reviewr
+git clone https://github.com/dcieslak19973/herdr-reviewr
 cd herdr-reviewr
 just install   # build release → bin/herdr-reviewr, ad-hoc re-signed on macOS
 herdr plugin link .
@@ -477,7 +494,7 @@ process. The loop only works while the plugin is linked: a `github:…` source i
 `herdr plugin list` runs a downloaded binary that local rebuilds never touch. Switch with:
 
 ```bash
-herdr plugin uninstall persiyanov.reviewr   # config is keyed by id and survives
+herdr plugin uninstall dcieslak19973.reviewr   # config is keyed by id and survives
 herdr plugin link .
 ```
 

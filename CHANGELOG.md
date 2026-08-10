@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+This is the `dcieslak19973/herdr-reviewr` fork, synced to upstream v0.30.1 with the
+fork's distinct features re-applied on top of upstream's architecture:
+
+### Added
+- **Bitbucket Data Center backend.** A self-hosted `bitbucket_host` classifies its remotes and reads pull requests over the REST API (`curl` + git-credential/`BITBUCKET_TOKEN`), alongside upstream's GitHub/GitLab/Azure DevOps providers.
+- **Agent comments.** A worktree-scoped persistent comment store under the git dir, shared by the reviewer (TUI) and the coding agent (new `comment` CLI subcommands), plus the bundled `reviewr-comments` skill and a `skill-install` subcommand. The `comment_sync` config key (`immediate` | `on-send`) governs when reviewer comments persist.
+- **Windows support.** A PATHEXT-aware tool probe, a `rundll32` URL opener, `clip` clipboard, a `sidebar` subcommand (pane orchestration in Rust for platforms without bash), an `install.ps1` binary installer, a per-platform `herdr-plugin.toml`, and an `x86_64-pc-windows-msvc` release target.
+
 ## [0.30.1] — 2026-08-08
 
 ### Fixed

@@ -41,6 +41,11 @@ pub enum Action {
     OpenPr,
     Refresh,
     Quit,
+    /// Flip the open/resolved status of the targeted comment (diff cursor or the list
+    /// overlay's highlight), any author (`specs/agent-comments-design.md` TUI).
+    ResolveComment,
+    /// Hide (or show) every resolved comment's inline card, both authors.
+    HideResolved,
 }
 
 /// One bound key: a base character, alone or under a `ctrl`/`alt` modifier. A modifier-less
@@ -85,7 +90,7 @@ impl std::fmt::Display for Key {
 
 /// Every action with its config name and default keys — the single source the default keymap,
 /// the name lookup, and the config error message are built from.
-const ACTIONS: [(Action, &str, &[Key]); 34] = [
+const ACTIONS: [(Action, &str, &[Key]); 36] = [
     (Action::Down, "down", &[Key::plain('j')]),
     (Action::Up, "up", &[Key::plain('k')]),
     (Action::NextHunk, "next-hunk", &[Key::plain(']')]),
@@ -120,6 +125,8 @@ const ACTIONS: [(Action, &str, &[Key]); 34] = [
     (Action::OpenPr, "open-pr", &[Key::plain('o')]),
     (Action::Refresh, "refresh", &[Key::plain('r')]),
     (Action::Quit, "quit", &[Key::plain('q')]),
+    (Action::ResolveComment, "resolve-comment", &[Key::plain('K')]),
+    (Action::HideResolved, "hide-resolved", &[Key::plain('H')]),
 ];
 
 impl Action {
@@ -256,6 +263,15 @@ mod tests {
         assert_eq!(keymap.hint(Action::TabPr), Key::plain('3'));
         assert_eq!(Action::by_config_name("list-wider"), Some(Action::NavigatorGrow));
         assert_eq!(Action::by_config_name("list-narrower"), Some(Action::NavigatorShrink));
+    }
+
+    #[test]
+    fn defaults_bind_resolve_and_hide_resolved() {
+        let keymap = Keymap::default();
+        assert_eq!(keymap.action_for(Key::plain('K')), Some(Action::ResolveComment));
+        assert_eq!(keymap.action_for(Key::plain('H')), Some(Action::HideResolved));
+        assert_eq!(keymap.hint(Action::ResolveComment), Key::plain('K'));
+        assert_eq!(keymap.hint(Action::HideResolved), Key::plain('H'));
     }
 
     #[test]

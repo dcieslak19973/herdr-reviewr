@@ -12,7 +12,7 @@ The `PR` tab shows the pull request for the branch you are on: its state, checks
 
 reviewr finds the branch's PR, then re-reads a snapshot of it on every poll. The tab follows one PR from open through merged, then switches to the branch's next PR. Until a PR exists, the tab is empty.
 
-The remote's hostname picks the forge: GitHub read via `gh`, GitLab via `glab`, Azure DevOps via `az`. Per-forge differences live in `forge-providers.md`. Everything below holds for all three.
+The remote's hostname picks the forge: GitHub read via `gh`, GitLab via `glab`, Azure DevOps via `az`, and a self-hosted Bitbucket Data Center via `curl` against its REST API. Per-forge differences live in `forge-providers.md`. Everything below holds for all three.
 
 ```
 PR #226  open  persiyanov/deep-research-benchmark → main   ⇡ 2 unpushed
@@ -62,6 +62,7 @@ Each forge knows its public hosts. One config key per forge adds one self-hosted
 | GitHub       | `github.com`                              | `github_host`       |
 | GitLab       | `gitlab.com`                              | `gitlab_host`       |
 | Azure DevOps | `dev.azure.com`, `*.visualstudio.com`     | `azure_devops_host` |
+| Bitbucket DC | _(none — self-hosted only)_                | `bitbucket_host`    |
 
 A remote counts when its hostname matches a forge host and its path is a repository on that forge. `upstream` wins over `origin`, so a fork clone reads the base repository's PRs with no setup:
 

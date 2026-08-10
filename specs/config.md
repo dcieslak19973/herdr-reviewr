@@ -22,6 +22,8 @@ auto_open = false
 github_host = "github.example.com"
 gitlab_host = "git.corp.example"
 azure_devops_host = "tfs.corp.example"
+bitbucket_host = "bitbucket.corp.example"
+comment_sync = "immediate"
 
 [keybindings]
 comment = ["c", "ㅊ"]
@@ -40,6 +42,8 @@ find    = ["ctrl+f"]
 | `github_host`        | bare hostname other than `github.com`                                              |
 | `gitlab_host`        | bare hostname other than `gitlab.com`                                              |
 | `azure_devops_host`  | bare hostname other than `dev.azure.com`                                           |
+| `bitbucket_host`     | bare hostname for a self-hosted Bitbucket Data Center (no built-in host)           |
+| `comment_sync`       | `immediate` (default) or `on-send` — when reviewer comments persist to the store   |
 | `keybindings`        | table of actions from the keymap in `input.md`, each a non-empty array of keys     |
 
 `--resolve-plugin-config` prints the validated config as JSON, every key included, the keymap resolved.

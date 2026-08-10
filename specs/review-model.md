@@ -108,12 +108,28 @@ A comment renders and is acted on only in the view it belongs to: a content comm
 
 Comments are a review pass, not a durable record.
 
-- Comments live in memory.
+- Reviewer comments live in memory by default; the comment store (below) can persist them.
 - A comment is removed only by export or delete. Never by a refresh or an agent's edits.
 - Editing changes the text in place.
 - Export takes the whole set and clears it.
 - A comment whose file leaves the changeset is flagged stale, and kept.
 - An `All files` comment is flagged stale only when its file is deleted from the worktree.
+
+### Comment store
+
+A worktree-scoped persistent store lets the reviewer and the coding agent share comments. One JSON
+file per comment lives at `<git-dir>/reviewr/comments/<id>.json` (`git rev-parse --git-dir`, so each
+linked worktree gets its own). A document is the review-model comment plus lifecycle fields: `id`
+(`c-<epoch-ms>-<hex>`), `author` (`user` or `agent`), `status` (`open` or `resolved`), and
+`created_at`. Unknown fields are preserved on rewrite; a file that fails to parse is skipped, never
+deleted.
+
+- The agent reads and writes the store through `herdr-reviewr comment add|list|resolve|rm`.
+- Agent comments are always store-resident and always shown. Reviewer comments persist per the
+  `comment_sync` config key: `immediate` (on save/edit/delete) or `on-send` (on `s`).
+- The TUI loads the store at startup and re-reads it when the store directory changes, so an
+  agent's edits appear without user action. If the store is unavailable the TUI falls back to the
+  in-memory behavior with a one-line notice.
 
 ### Export
 

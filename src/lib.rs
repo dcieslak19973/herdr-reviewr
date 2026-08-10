@@ -1146,6 +1146,10 @@ fn event_loop(
                     continue;
                 }
                 schedule_poll_probe(&mut pr, app.tab);
+                // A cheap directory stat: picks up an external agent add/resolve (the CLI, or
+                // another session) without the reviewer doing anything
+                // (`specs/agent-comments-design.md` TUI/"Load and watch").
+                app.check_comment_store();
                 // The tick's refresh runs on the worker. The same request samples the agents
                 // in the worktree there, so a turn promoted by the sample is visible to the
                 // same request's changed-files build (specs/herdr-host.md). A turn end sets
@@ -1567,6 +1571,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             }
             (Some(K::Edit), _) => app.start_edit(),
             (Some(K::Delete), _) => app.delete_comment(),
+            (Some(K::ResolveComment), _) => app.resolve_selected_comment(),
+            (Some(K::HideResolved), _) => app.toggle_hide_resolved(),
             _ => {}
         }
         return Ok(());
@@ -1605,6 +1611,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             // off-screen cursor. (The comments-list overlay targets the highlighted row instead.)
             K::Edit if app.focus == Focus::Diff => app.start_edit(),
             K::Delete if app.focus == Focus::Diff => app.delete_comment(),
+            K::ResolveComment if app.focus == Focus::Diff => app.resolve_selected_comment(),
+            K::HideResolved => app.toggle_hide_resolved(),
             K::Send => app.send_to_agent(),
             K::Copy => {
                 app.export(&Clipboard);
@@ -1615,8 +1623,9 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
             K::Search => app.open_search(),
             K::Find => app.open_find(),
             K::Keys => app.toggle_keys(),
-            // `edit`/`delete` off the diff, and `open-pr` off the `PR` tab, are inert.
-            K::Edit | K::Delete | K::OpenPr => {}
+            // `edit`/`delete`/`resolve-comment` off the diff, and `open-pr` off the `PR` tab,
+            // are inert.
+            K::Edit | K::Delete | K::OpenPr | K::ResolveComment => {}
         }
         return Ok(());
     }

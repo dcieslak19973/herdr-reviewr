@@ -203,6 +203,95 @@ fn a_saved_comment_renders_inline_as_a_card() {
     assert!(out.contains("comment ·"), "the inline card is titled with the location");
 }
 
+/// Catppuccin mauve — the agent-comment chip and the comments-list border.
+const MAUVE: ratatui::style::Color = ratatui::style::Color::Rgb(0xcb, 0xa6, 0xf7);
+
+#[test]
+fn an_agent_comment_renders_as_a_distinct_card_with_a_chip() {
+    use herdr_reviewr::comments::{Author, StoredComment, Status};
+    use herdr_reviewr::model::{Comment, Side};
+
+    let r = Repo::init();
+    r.write("a.rs", "alpha\nbeta\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nBETA\n");
+    let mut app = app_on(&r);
+    app.agent_comments.push(StoredComment {
+        id: "c-1-aaaa".to_string(),
+        author: Author::Agent,
+        status: Status::Open,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        comment: Comment {
+            file: "a.rs".to_string(),
+            side: Side::New,
+            start: 2,
+            end: 2,
+            lines: "+BETA".to_string(),
+            text: "consider a rename".to_string(),
+            diff_anchored: true,
+        },
+    });
+
+    let buf = render_buffer(&app);
+    let out = dump(&buf);
+    assert!(out.contains("consider a rename"), "the agent card renders inline: {out:?}");
+    assert!(out.contains("agent"), "the agent chip label renders: {out:?}");
+    let chip_mauve = (0..buf.area.width).any(|x| {
+        (0..buf.area.height)
+            .any(|y| buf.cell((x, y)).is_some_and(|c| c.fg == MAUVE && c.symbol() == "a"))
+    });
+    assert!(chip_mauve, "the agent chip paints in the mauve accent");
+}
+
+#[test]
+fn a_resolved_comment_dims_and_marks_itself() {
+    let r = Repo::init();
+    r.write("a.rs", "alpha\nbeta\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nBETA\n");
+    let mut app = app_on(&r);
+
+    app.focus = Focus::Diff;
+    app.diff_cursor = app.visible.iter().position(|row| row.marker() == '+').unwrap();
+    app.start_comment();
+    for ch in "fix this".chars() {
+        app.input_push(ch);
+    }
+    app.submit_comment();
+    app.resolve_selected_comment();
+
+    let out = render(&app);
+    assert!(out.contains("fix this"), "a resolved card still shows its text: {out:?}");
+    assert!(out.contains("resolved"), "the resolved marker renders: {out:?}");
+}
+
+#[test]
+fn hide_resolved_hides_the_resolved_card_entirely() {
+    let r = Repo::init();
+    r.write("a.rs", "alpha\nbeta\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nBETA\n");
+    let mut app = app_on(&r);
+
+    app.focus = Focus::Diff;
+    app.diff_cursor = app.visible.iter().position(|row| row.marker() == '+').unwrap();
+    app.start_comment();
+    for ch in "fix this".chars() {
+        app.input_push(ch);
+    }
+    app.submit_comment();
+    app.resolve_selected_comment();
+    app.toggle_hide_resolved();
+
+    let out = render(&app);
+    assert!(!out.contains("fix this"), "a hidden resolved card renders nothing:\n{out}");
+
+    // Showing them again brings the card back — the toggle round-trips.
+    app.toggle_hide_resolved();
+    let out = render(&app);
+    assert!(out.contains("fix this"), "toggling again shows the card once more:\n{out}");
+}
+
 #[test]
 fn a_renamed_file_shows_old_arrow_new_in_the_header() {
     let r = Repo::init();

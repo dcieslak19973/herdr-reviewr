@@ -49,6 +49,8 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 | `edit`                                                   | edit the comment under the cursor           | `e`                                         | —                             |
 | `delete`                                                 | delete the comment under the cursor         | `d`                                         | —                             |
 | `next-comment` / `prev-comment`                          | jump to next / previous comment             | `n` / `N`                                   | —                             |
+| `resolve-comment`                                        | resolve / reopen the targeted comment, any author | `K`                                   | —                             |
+| `hide-resolved`                                          | hide / show every resolved comment's card   | `H`                                         | —                             |
 | `comments`                                               | list and manage all comments                | `l`                                         | —                             |
 | `search`                                                 | open the search screen (`search.md`)        | `/`                                         | —                             |
 | `find`                                                   | open in-file find (`find-in-file.md`)       | `ctrl+f`                                    | —                             |
@@ -70,6 +72,8 @@ Outside the hidden-state rules above, these four navigator actions work from eit
 A divider drag belongs to the navigator position and split axis at mouse-down. A keypress, terminal resize, or config-driven layout change cancels it. A cancelled drag keeps its last painted share, and the cancelling keypress still performs its own action. After cancellation, drag events are consumed until mouse-up rather than becoming a selection in the read pane.
 
 Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
+
+Agent comments (`comment_sync`, `agent-comments-design.md`) render alongside the reviewer's own, tagged with an ` agent ` chip and the theme's `mauve` accent; `resolve-comment` toggles any comment's status, dimming a resolved one, and `hide-resolved` drops resolved cards from the diff pane entirely (the comments list still lists every one of the reviewer's own). `e`/`d` never act on an agent's comment — it is read-only from the TUI.
 
 ## Behavior
 
