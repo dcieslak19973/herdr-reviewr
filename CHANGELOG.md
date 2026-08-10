@@ -6,6 +6,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.31.1] — 2026-08-10
+
+### Fixed
+- **Discover agent comments across files.** The comments list (`l`) now spans both reviewer and agent comments across every file, ordered by file then line; `enter` on a row jumps to that comment's file and line. Previously `l` was inert whenever the only comments were agent-authored, leaving cards scattered across files undiscoverable. Resolve works on any row; edit/delete stay reviewer-only. The footer legend and `?` help reflect the corrected behavior.
+
+
 ## [0.31.0] — 2026-08-09
 
 This is the `dcieslak19973/herdr-reviewr` fork, synced to upstream v0.30.1 with the
