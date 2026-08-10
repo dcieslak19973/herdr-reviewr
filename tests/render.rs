@@ -244,6 +244,41 @@ fn an_agent_comment_renders_as_a_distinct_card_with_a_chip() {
 }
 
 #[test]
+fn open_list_renders_agent_comments_when_the_reviewer_has_none() {
+    use herdr_reviewr::comments::{Author, Status, StoredComment};
+    use herdr_reviewr::model::{Comment, Side};
+
+    let r = Repo::init();
+    r.write("a.rs", "alpha\nbeta\n");
+    r.commit_all("init");
+    r.write("a.rs", "alpha\nBETA\n");
+    let mut app = app_on(&r);
+    assert!(app.store.is_empty(), "the reviewer wrote nothing");
+    app.agent_comments.push(StoredComment {
+        id: "c-1-aaaa".to_string(),
+        author: Author::Agent,
+        status: Status::Open,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        comment: Comment {
+            file: "a.rs".to_string(),
+            side: Side::New,
+            start: 2,
+            end: 2,
+            lines: "+BETA".to_string(),
+            text: "agent-only note".to_string(),
+            diff_anchored: true,
+        },
+    });
+
+    app.open_list();
+    assert_eq!(app.mode, herdr_reviewr::app::Mode::List, "`l` opens on agent comments alone");
+
+    let out = render(&app);
+    assert!(out.contains("agent-only note"), "the agent comment lists its text:\n{out}");
+    assert!(out.contains("agent"), "the agent chip renders in the list:\n{out}");
+}
+
+#[test]
 fn a_resolved_comment_dims_and_marks_itself() {
     let r = Repo::init();
     r.write("a.rs", "alpha\nbeta\n");

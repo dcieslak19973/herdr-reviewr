@@ -1559,12 +1559,14 @@ pub fn handle_key(app: &mut App, key: KeyEvent, area: Rect, keymap: &Keymap) -> 
     }
 
     // The comments-list overlay acts through the same bindings and closes on `esc` and the
-    // `comments` binding (`specs/input.md`).
+    // `comments` binding; `enter` jumps the read pane to the highlighted row's comment, any
+    // author (`specs/input.md`).
     if app.mode == Mode::List {
         match (action, key.code) {
             (Some(K::Comments), _) | (_, Esc) => app.close_list(),
             (Some(K::Down), _) => app.list_move(1),
             (Some(K::Up), _) => app.list_move(-1),
+            (_, Enter) => app.open_selected_comment()?,
             (Some(K::Send), _) => app.send_to_agent(),
             (Some(K::Copy), _) => {
                 app.export(&Clipboard);
