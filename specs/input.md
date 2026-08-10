@@ -18,7 +18,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 - The keys shown are defaults: a bare character, or a `ctrl+`/`alt+` chord (`config.md`).
 - The arrows, `tab`, `esc`, `enter`, and the page keys are structural. They are fixed and never rebind.
 - A key hint in the header or the footer shows its action's first bound key.
-- The comments list acts through the same bindings and closes on `esc` and the `comments` binding.
+- The comments list acts through the same bindings and closes on `esc` and the `comments` binding; `enter` jumps the read pane to the highlighted row's file and line.
 - The agent picker acts through the `down` / `up` bindings and closes on `esc`.
 - The base picker filters through a text field with the comment editor's controls, moves through the arrows, and closes on `esc`.
 - Prose and mockups elsewhere show the default keys.
@@ -51,7 +51,7 @@ The keymap is rebindable per action through `[keybindings]` in the plugin config
 | `next-comment` / `prev-comment`                          | jump to next / previous comment             | `n` / `N`                                   | —                             |
 | `resolve-comment`                                        | resolve / reopen the targeted comment, any author | `K`                                   | —                             |
 | `hide-resolved`                                          | hide / show every resolved comment's card   | `H`                                         | —                             |
-| `comments`                                               | list and manage all comments                | `l`                                         | —                             |
+| `comments`                                               | list every comment, any author, and jump to one | `l`                                    | —                             |
 | `search`                                                 | open the search screen (`search.md`)        | `/`                                         | —                             |
 | `find`                                                   | open in-file find (`find-in-file.md`)       | `ctrl+f`                                    | —                             |
 | `keys`                                                   | toggle the footer's full shortcut list      | `?`                                         | —                             |
@@ -73,7 +73,7 @@ A divider drag belongs to the navigator position and split axis at mouse-down. A
 
 Writing a comment: select a range or land on a line, press `c`, type into the inline box, `enter` saves and `esc` cancels. A saved comment renders as a read-only card spliced under its line, titled with its location, so written feedback stays on screen. `e` reopens the card as an edit box in place, hiding the card while editing. `d` deletes it. A successful send names the agent it added the comments to. A successful copy reports that they were copied. The transient status shows on the footer, pluralizes `comment`, and fades without covering the primary action.
 
-Agent comments (`comment_sync`, `agent-comments-design.md`) render alongside the reviewer's own, tagged with an ` agent ` chip and the theme's `mauve` accent; `resolve-comment` toggles any comment's status, dimming a resolved one, and `hide-resolved` drops resolved cards from the diff pane entirely (the comments list still lists every one of the reviewer's own). `e`/`d` never act on an agent's comment — it is read-only from the TUI.
+Agent comments (`comment_sync`, `agent-comments-design.md`) render alongside the reviewer's own, tagged with an ` agent ` chip and the theme's `mauve` accent; `resolve-comment` toggles any comment's status, dimming a resolved one, and `hide-resolved` drops resolved cards from the diff pane entirely. The comments list spans both authors, ordered by file then line, so a comment left on a file that is not already open is still discoverable; `enter` jumps the read pane to the highlighted row's file and line, switching tab first when the comment anchors to the other one. `e`/`d` never act on an agent's comment — it is read-only from the TUI — but `resolve-comment` and the jump both work on any row there.
 
 ## Behavior
 

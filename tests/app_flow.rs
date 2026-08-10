@@ -1365,6 +1365,79 @@ fn resolving_an_agent_comment_from_the_diff_cursor_updates_disk() {
 }
 
 #[test]
+fn resolving_an_agent_comment_from_the_list_updates_disk() {
+    let r = edited_repo();
+    let mut app = app_on(&r);
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    let comment = herdr_reviewr::model::Comment {
+        file: "a.rs".to_string(),
+        side: Side::New,
+        start: 2,
+        end: 2,
+        lines: "+BETA".to_string(),
+        text: "left a note".to_string(),
+        diff_anchored: true,
+    };
+    let stored = store.add(herdr_reviewr::comments::Author::Agent, &comment).unwrap();
+    app.check_comment_store();
+    assert_eq!(app.agent_comments.len(), 1);
+
+    app.open_list();
+    assert_eq!(app.mode, Mode::List, "the list opens on the agent comment alone");
+    app.list_cursor = 0;
+    app.resolve_selected_comment();
+
+    assert_eq!(app.agent_comments[0].status, herdr_reviewr::comments::Status::Resolved);
+    let saved = store.load();
+    let on_disk = saved.iter().find(|sc| sc.id == stored.id).expect("still on disk");
+    assert_eq!(
+        on_disk.status,
+        herdr_reviewr::comments::Status::Resolved,
+        "resolving from the list reaches disk"
+    );
+}
+
+#[test]
+fn open_selected_comment_jumps_to_a_different_file_than_the_one_open() {
+    let r = Repo::init();
+    r.write("a.rs", "one\ntwo\nthree\n");
+    r.write("b.rs", "alpha\nbeta\ngamma\n");
+    r.commit_all("init");
+    r.write("a.rs", "one\nTWO\nthree\n");
+    r.write("b.rs", "alpha\nBETA\ngamma\n");
+    let mut app = app_on(&r);
+
+    // a.rs is the open file; the comment we jump to lives on b.rs — the core discovery fix:
+    // an agent comment left on a file that is not already open.
+    app.select_file(file_row(&app, "a.rs")).unwrap();
+    assert_eq!(app.diff_path.as_deref(), Some("a.rs"), "a.rs is open before the jump");
+
+    let store = herdr_reviewr::comments::Store::open(&r.path_buf()).unwrap();
+    let comment = herdr_reviewr::model::Comment {
+        file: "b.rs".to_string(),
+        side: Side::New,
+        start: 2,
+        end: 2,
+        lines: "+BETA".to_string(),
+        text: "left a note on b".to_string(),
+        diff_anchored: true,
+    };
+    store.add(herdr_reviewr::comments::Author::Agent, &comment).unwrap();
+    app.check_comment_store();
+    assert_eq!(app.agent_comments.len(), 1);
+
+    app.open_list();
+    assert_eq!(app.mode, Mode::List);
+    app.list_cursor = 0;
+    app.open_selected_comment().unwrap();
+
+    assert_eq!(app.diff_path.as_deref(), Some("b.rs"), "the jump opened the comment's file");
+    assert_eq!(app.mode, Mode::Normal, "the overlay closes after the jump");
+    let row = app.visible.get(app.diff_cursor).expect("cursor lands on a row");
+    assert_eq!(row.new_no(), Some(2), "cursor landed on the commented line");
+}
+
+#[test]
 fn default_keys_resolve_and_hide_resolved_via_the_dispatcher() {
     let r = edited_repo();
     let mut app = app_on(&r);

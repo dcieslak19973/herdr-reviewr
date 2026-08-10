@@ -18,7 +18,7 @@ use ratatui::widgets::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, Band, Focus, FooterAction, Mode, Tab};
+use crate::app::{App, Band, CommentTarget, Focus, FooterAction, Mode, Tab};
 use crate::comments;
 use crate::config::NavigatorPosition;
 use crate::diff::{FileDiff, FileState, Row};
@@ -1622,7 +1622,7 @@ fn action_key_label(app: &App, action: FooterAction) -> (String, String) {
             return ("tab".into(), if to_code { "code" } else { "files" }.into());
         }
         A::PickResult => ("↑↓".into(), "pick"),
-        A::OpenResult => ("enter".into(), "open"),
+        A::OpenResult | A::OpenComment => ("enter".into(), "open"),
         A::OpenPr => (hint(K::OpenPr), "open ↗"),
         A::Refresh => (hint(K::Refresh), "refresh"),
         A::Tabs => {
@@ -1920,6 +1920,11 @@ fn render_band(
 const LIST_POPUP_W_PCT: u16 = 80;
 const LIST_POPUP_H_PCT: u16 = 70;
 
+/// The comments-list row's agent chip. Its width is reserved on every row, painted or not, so
+/// a reviewer row and an agent row at the same location-text length never shift the list's
+/// columns — the same reservation the inline card makes for its own chip (`comment_card_lines`).
+const LIST_CHIP: &str = " agent";
+
 fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     let p = app.palette();
     let body = panes(area, app).body;
@@ -1927,28 +1932,40 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
     let h = body.height * LIST_POPUP_H_PCT / 100;
     let popup = body_popup(area, app, w, h);
     frame.render_widget(Clear, popup);
+    let rows = app.comment_list();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(p.mauve))
-        .title(framed_title(&format!("Comments ({})", app.store.len())));
+        .title(framed_title(&format!("Comments ({})", rows.len())));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
     let width = inner.width as usize;
-    let items: Vec<ListItem> = app
-        .store
+    let chip_run = LIST_CHIP.width();
+    let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
-        .map(|(i, c)| {
-            let resolved = app.comment_resolved(i);
+        .map(|(i, &target)| {
+            let fill = (i == app.list_cursor).then_some(p.surface2);
+            let Some(c) = app.comment_ref(target) else {
+                // A stale index (should not happen — the list is recomputed every frame) still
+                // paints an empty, selectable row rather than panicking.
+                return selectable_row(p, Vec::new(), width, fill);
+            };
+            let resolved = app.target_resolved(target);
             let loc = Span::styled(
                 format!(" {}", c.location()),
                 Style::default()
                     .fg(if resolved { p.overlay1 } else { p.mauve })
                     .add_modifier(Modifier::BOLD),
             );
+            let chip = if matches!(target, CommentTarget::Agent(_)) {
+                Span::styled(LIST_CHIP, Style::default().fg(p.mauve).add_modifier(Modifier::BOLD))
+            } else {
+                Span::raw(" ".repeat(chip_run))
+            };
             let body_style = if resolved { Style::default().fg(p.overlay1) } else { text_style(p) };
-            let mut spans = vec![loc, Span::styled(format!("  {}", c.text), body_style)];
+            let mut spans = vec![loc, chip, Span::styled(format!("  {}", c.text), body_style)];
             if resolved {
                 spans.push(Span::styled("  (resolved)", Style::default().fg(p.overlay1)));
             }
@@ -1958,7 +1975,7 @@ fn render_comments_list(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("  (stale)", Style::default().fg(p.red)));
             }
             // The list overlay is the active modal, so its row reads at full brightness.
-            selectable_row(p, spans, width, (i == app.list_cursor).then_some(p.surface2))
+            selectable_row(p, spans, width, fill)
         })
         .collect();
     frame.render_widget(List::new(items), inner);

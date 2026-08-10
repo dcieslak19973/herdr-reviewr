@@ -392,6 +392,9 @@ pub enum FooterAction {
     Newline,
     Cancel,
     CloseList,
+    /// `enter` in the comments list: jump the read pane to the highlighted row's comment,
+    /// any author.
+    OpenComment,
     /// The agent picker's own bar: send to the highlight, move it, and cancel
     /// (`specs/input.md`). The digits are literal here, so the move hint names them.
     PickAgent,
@@ -690,7 +693,7 @@ impl CommentMeta {
 /// (`agent_comments`, index-addressed) — the one type resolve/reopen acts on regardless of
 /// author (`specs/agent-comments-design.md` TUI/Keys).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CommentTarget {
+pub(crate) enum CommentTarget {
     User(usize),
     Agent(usize),
 }
@@ -3045,11 +3048,57 @@ impl App {
         self.comment_meta.get(index).is_some_and(|m| m.status == comments::Status::Resolved)
     }
 
-    /// The store index to act on: the comment under the diff cursor, or — in the
-    /// list overlay — the highlighted row.
+    /// The comments-list overlay's unified backing: every reviewer draft (`store`,
+    /// `User`-indexed) and every agent comment (`agent_comments`, `Agent`-indexed), ordered by
+    /// `(file, start)` so a review scattered across files reads as one per-file walk regardless
+    /// of author — a tie (the same file and line) puts the reviewer's own draft first, since
+    /// it is the one this session wrote. Recomputed on demand rather than cached, so a resolve
+    /// or a poll's disk sync never leaves a stale row behind (`specs/agent-comments-design.md`
+    /// TUI/Keys).
+    pub(crate) fn comment_list(&self) -> Vec<CommentTarget> {
+        let mut list: Vec<CommentTarget> = (0..self.store.len())
+            .map(CommentTarget::User)
+            .chain((0..self.agent_comments.len()).map(CommentTarget::Agent))
+            .collect();
+        let is_agent = |t: CommentTarget| u8::from(matches!(t, CommentTarget::Agent(_)));
+        list.sort_by(|&a, &b| {
+            let key = |t: CommentTarget| self.comment_ref(t).map(|c| (c.file.as_str(), c.start));
+            key(a).cmp(&key(b)).then_with(|| is_agent(a).cmp(&is_agent(b)))
+        });
+        list
+    }
+
+    /// The `Comment` a [`CommentTarget`] names, from `store` or `agent_comments` as its variant
+    /// picks — the one place either lookup happens, so the list, the jump, and the sort all read
+    /// the same value.
+    pub(crate) fn comment_ref(&self, target: CommentTarget) -> Option<&Comment> {
+        match target {
+            CommentTarget::User(i) => self.store.get(i),
+            CommentTarget::Agent(i) => self.agent_comments.get(i).map(|sc| &sc.comment),
+        }
+    }
+
+    /// Whether the comment a [`CommentTarget`] names is resolved, either author — the list
+    /// overlay's dim/marker state (`specs/agent-comments-design.md` TUI/Rendering).
+    pub(crate) fn target_resolved(&self, target: CommentTarget) -> bool {
+        match target {
+            CommentTarget::User(i) => self.comment_resolved(i),
+            CommentTarget::Agent(i) => {
+                self.agent_comments.get(i).is_some_and(|sc| sc.status == comments::Status::Resolved)
+            }
+        }
+    }
+
+    /// The store index to act on: the comment under the diff cursor, or — in the list
+    /// overlay — the highlighted row, but only when it targets the reviewer's own draft. An
+    /// agent row has no store index, so `edit`/`delete` silently no-op on it — it is read-only
+    /// from the TUI (`specs/agent-comments-design.md` TUI/Keys).
     fn target_comment(&self) -> Option<usize> {
         if self.mode == Mode::List {
-            return (self.list_cursor < self.store.len()).then_some(self.list_cursor);
+            return match self.comment_list().get(self.list_cursor) {
+                Some(&CommentTarget::User(i)) => Some(i),
+                _ => None,
+            };
         }
         self.comment_under_cursor()
     }
@@ -3084,12 +3133,11 @@ impl App {
     }
 
     /// The comment [`Self::resolve_selected_comment`] acts on: the list overlay's highlighted
-    /// row (the reviewer's own drafts only — agent comments never enter it) while `Mode::List`
-    /// is open, else whichever comment the diff cursor rests on, any author.
+    /// row, any author, while `Mode::List` is open, else whichever comment the diff cursor
+    /// rests on, any author.
     fn resolve_target(&self) -> Option<CommentTarget> {
         if self.mode == Mode::List {
-            return (self.list_cursor < self.store.len())
-                .then_some(CommentTarget::User(self.list_cursor));
+            return self.comment_list().get(self.list_cursor).copied();
         }
         self.comment_ref_under_cursor()
     }
@@ -3111,7 +3159,7 @@ impl App {
             self.clamp_list_cursor();
             self.status = "comment deleted".to_string();
             // Don't strand the user in an empty "Comments (0)" overlay, matching `export`.
-            if self.store.is_empty() {
+            if self.store.is_empty() && self.agent_comments.is_empty() {
                 self.close_list();
             }
         }
@@ -3487,8 +3535,55 @@ impl App {
         Ok(())
     }
 
+    /// `enter` in the comments list: jump the read pane to the highlighted row's comment — its
+    /// tab (`Changes` for a diff-anchored comment, `All files` for a content one), its file
+    /// (expanding collapsed ancestors so a hidden row still opens, same shape as
+    /// [`Self::search_open_pick`]), and its line — then close the overlay. A comment whose file
+    /// left the changeset or the worktree since it was written opens nothing; the overlay still
+    /// closes rather than sitting stale over it (`specs/agent-comments-design.md` TUI/Keys).
+    pub fn open_selected_comment(&mut self) -> Result<()> {
+        let Some(target) = self.comment_list().get(self.list_cursor).copied() else {
+            self.close_list();
+            return Ok(());
+        };
+        let Some(comment) = self.comment_ref(target).cloned() else {
+            self.close_list();
+            return Ok(());
+        };
+        let tab = if comment.diff_anchored { Tab::Changes } else { Tab::AllFiles };
+        if self.tab != tab {
+            self.set_tab(tab)?;
+        }
+        let Some(entry) = self.entries.iter().find(|e| e.path == comment.file).cloned() else {
+            self.close_list();
+            return Ok(());
+        };
+        self.reset_diff_view();
+        let mut expanded = false;
+        let mut dir = comment.file.as_str();
+        while let Some((parent, _)) = dir.rsplit_once('/') {
+            expanded |= self.set_dir_expanded(parent, true);
+            dir = parent;
+        }
+        if expanded {
+            self.rebuild_file_rows();
+        }
+        self.open_path_in_tab(entry.path, entry.previous_path);
+        if let Some(fi) = self.file_row_of_path(&comment.file) {
+            self.file_cursor = fi;
+            self.reveal_files = true;
+        }
+        if let Some(idx) = self.visible.iter().position(|row| line_in(&comment, row)) {
+            self.diff_cursor = idx;
+        }
+        self.focus = Focus::Diff;
+        self.reveal_diff = true;
+        self.close_list();
+        Ok(())
+    }
+
     pub fn open_list(&mut self) {
-        if !self.store.is_empty() {
+        if !self.store.is_empty() || !self.agent_comments.is_empty() {
             self.list_cursor = 0;
             self.mode = Mode::List;
         }
@@ -3520,6 +3615,7 @@ impl App {
                 return vec![
                     (A::Send, Primary),
                     (A::CloseList, Do),
+                    (A::OpenComment, Do),
                     (A::Copy, Do),
                     (A::EditComment, Do),
                     (A::DeleteComment, Do),
@@ -3691,8 +3787,10 @@ impl App {
         if !self.store.is_empty() || !self.agent_comments.is_empty() {
             out.push((A::HideResolved, Go));
         }
-        if !self.store.is_empty() {
+        if !self.store.is_empty() || !self.agent_comments.is_empty() {
             out.push((A::List, Go));
+        }
+        if !self.store.is_empty() {
             out.push((A::Copy, Go));
         }
         if !out.iter().any(|&(a, _)| a == A::Refresh) {
@@ -3731,8 +3829,9 @@ impl App {
     }
 
     pub fn list_move(&mut self, delta: isize) {
-        if self.mode == Mode::List && !self.store.is_empty() {
-            self.list_cursor = step(self.list_cursor, delta, self.store.len());
+        let len = self.comment_list().len();
+        if self.mode == Mode::List && len > 0 {
+            self.list_cursor = step(self.list_cursor, delta, len);
         }
     }
 }
@@ -3990,8 +4089,9 @@ impl App {
     }
 
     fn clamp_list_cursor(&mut self) {
-        if self.list_cursor >= self.store.len() {
-            self.list_cursor = self.store.len().saturating_sub(1);
+        let len = self.comment_list().len();
+        if self.list_cursor >= len {
+            self.list_cursor = len.saturating_sub(1);
         }
     }
 
@@ -4142,6 +4242,7 @@ impl App {
         self.agent_comments =
             disk.iter().filter(|sc| sc.author == comments::Author::Agent).cloned().collect();
         if self.comment_meta.is_empty() {
+            self.clamp_list_cursor();
             return; // nothing of the reviewer's to reconcile
         }
         let by_id: HashMap<&str, &comments::StoredComment> =
@@ -4166,7 +4267,7 @@ impl App {
                 self.comment_meta.push(meta);
             }
         }
-        self.list_cursor = self.list_cursor.min(self.store.len().saturating_sub(1));
+        self.clamp_list_cursor();
     }
 }
 
@@ -4330,7 +4431,8 @@ fn anchor(selected: &[Row]) -> Option<(Side, u32, u32, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{App, Mode};
+    use super::{App, Band, CommentTarget, FooterAction, Mode};
+    use crate::comments;
     use crate::config::NavigatorPosition;
     use crate::model::{Comment, Scope, Side};
     use std::path::PathBuf;
@@ -4531,5 +4633,110 @@ mod tests {
         assert!(app.set_tab(super::Tab::AllFiles).is_err());
         assert!(app.move_cursor(1).is_err());
         assert!(app.select_file(0).is_err());
+    }
+
+    /// A synced-in agent comment on `file:start`, for tests that don't care about its id or
+    /// exact text.
+    fn agent_comment(id: &str, file: &str, start: u32) -> comments::StoredComment {
+        comments::StoredComment {
+            id: id.to_string(),
+            author: comments::Author::Agent,
+            status: comments::Status::Open,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            comment: Comment {
+                file: file.to_string(),
+                side: Side::New,
+                start,
+                end: start,
+                lines: String::new(),
+                text: format!("agent note on {file}:{start}"),
+                diff_anchored: true,
+            },
+        }
+    }
+
+    #[test]
+    fn open_list_opens_with_only_agent_comments() {
+        let mut app = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        assert!(app.store.is_empty());
+        app.agent_comments.push(agent_comment("ag-1", "a.rs", 3));
+
+        app.open_list();
+
+        assert_eq!(app.mode, Mode::List, "the list opens on agent comments alone");
+        assert_eq!(app.list_cursor, 0);
+    }
+
+    #[test]
+    fn comment_list_orders_reviewer_and_agent_comments_by_file_then_line() {
+        let mut app = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        app.store.add(Comment {
+            file: "b.rs".to_string(),
+            side: Side::New,
+            start: 5,
+            end: 5,
+            lines: String::new(),
+            text: "reviewer on b".to_string(),
+            diff_anchored: true,
+        });
+        app.agent_comments.push(agent_comment("ag-1", "a.rs", 10));
+        app.agent_comments.push(agent_comment("ag-2", "b.rs", 1));
+
+        let list = app.comment_list();
+        let locations: Vec<(String, u32)> = list
+            .iter()
+            .map(|&t| {
+                let c = app.comment_ref(t).expect("every listed target resolves");
+                (c.file.clone(), c.start)
+            })
+            .collect();
+        assert_eq!(
+            locations,
+            vec![("a.rs".to_string(), 10), ("b.rs".to_string(), 1), ("b.rs".to_string(), 5),],
+            "one per-file walk regardless of author: a.rs before b.rs, b.rs:1 before b.rs:5"
+        );
+    }
+
+    #[test]
+    fn comment_list_breaks_a_file_and_line_tie_toward_the_reviewer() {
+        let mut app = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        app.agent_comments.push(agent_comment("ag-1", "a.rs", 4));
+        app.store.add(Comment {
+            file: "a.rs".to_string(),
+            side: Side::New,
+            start: 4,
+            end: 4,
+            lines: String::new(),
+            text: "reviewer on a".to_string(),
+            diff_anchored: true,
+        });
+
+        let list = app.comment_list();
+        assert_eq!(list, vec![CommentTarget::User(0), CommentTarget::Agent(0)]);
+    }
+
+    #[test]
+    fn footer_bands_offers_list_with_only_agent_comments() {
+        let mut app = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        assert!(app.store.is_empty());
+        app.agent_comments.push(agent_comment("ag-1", "a.rs", 1));
+
+        let bands = app.footer_bands();
+        assert!(
+            bands.iter().any(|&(a, _)| a == FooterAction::List),
+            "agent-only comments still advertise `l`: {bands:?}"
+        );
+    }
+
+    #[test]
+    fn mode_list_footer_bands_offer_the_jump_action() {
+        let mut app = App::blocked(PathBuf::from("."), Scope::Uncommitted, None);
+        app.mode = Mode::List;
+
+        let bands = app.footer_bands();
+        assert!(
+            bands.contains(&(FooterAction::OpenComment, Band::Do)),
+            "the list overlay offers `enter open`: {bands:?}"
+        );
     }
 }
