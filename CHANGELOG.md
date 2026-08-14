@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-08-14
+
 ### Changed
 - **`q` closes the pane.** Quitting now tears the reviewr pane down instead of leaving a dead shell where the review UI was, matching every other herdr pane plugin. A pane you renamed is left open with its name; only a pane reviewr owns (still labeled `reviewr`) closes.
 
