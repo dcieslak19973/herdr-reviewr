@@ -26,7 +26,7 @@ The binary paints its empty frame before the first git scan, so the pane never s
 
 A reviewr pane is any pane running the review UI in its foreground process group, read live from herdr at each action and event. A wrapped launch like `cargo run` counts through its child. A flag run like `--resolve-plugin-config` is not the review UI and never counts.
 
-The review run labels its pane `reviewr` when the pane has no label, and a normal exit clears only a `reviewr` label, so a name the user gave the pane survives both ends. The label is display only: a failed write or a stale label changes nothing an action or the event reads.
+The review run labels its pane `reviewr` when the pane has no label. A user quit (`q`) closes a pane reviewr owns — one still carrying that `reviewr` label — so quitting tears the pane down rather than leaving a dead shell, matching every other herdr pane plugin. Any other exit, and a pane the user renamed, keeps the pane and clears only a `reviewr` label, so a name the user gave the pane survives both ends. The label is display only: a failed write or a stale label changes nothing an action or the event reads.
 
 ## Install paths
 
@@ -177,6 +177,7 @@ Actions:
 - An open never opens into the pane that invoked it.
 - An action acts on the focused workspace. herdr offers no workspace selector on invoke, so a scripted open lands wherever the user is looking, not where the script meant.
 - After a close, focus falls wherever herdr leaves it.
+- A user quit closes our own pane after the terminal is restored, so the shell prompt returns whether or not herdr answers. The wait is bounded; a herdr that never answers leaves the pane and logs. Closing our own pane may end our process mid-call, which is the intended end either way. A pane the user renamed is never closed, so a quit there leaves the pane and its name.
 
 Send and tracking:
 

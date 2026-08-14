@@ -162,6 +162,31 @@ pub fn clear_pane_label() {
     }
 }
 
+/// Close our own pane on a user quit, so `q` tears the pane down instead of leaving a dead
+/// shell where the review UI was (`specs/herdr-host.md` Pane identity) — like every other
+/// herdr pane plugin. Only a pane reviewr owns closes: one still carrying the `reviewr`
+/// default label it stamped (or herdr auto-labeled). A pane the user renamed survives with
+/// its name, the same end the label clear preserves. Plain `pane close`, the actions' own
+/// sweep call, reaches a pane herdr's plugin registry may have forgotten after a restart
+/// (`docs/herdr-api-notes.md`). The wait is bounded: this runs after the terminal is
+/// restored, and a hung herdr must not hold the shell prompt hostage. Without a pane id —
+/// outside herdr — a no-op.
+pub fn close_pane() {
+    let (Ok(ws), Ok(pane)) = (env::var("HERDR_WORKSPACE_ID"), env::var("HERDR_PANE_ID")) else {
+        return;
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        if current_label(&ws, &pane).as_deref() == Some("reviewr") {
+            let _ = herdr(&["pane", "close", &pane]);
+        }
+        let _ = tx.send(());
+    });
+    if rx.recv_timeout(ANSWER_BOUND).is_err() {
+        logln!("pane close unanswered after {ANSWER_BOUND:?}; leaving the pane");
+    }
+}
+
 /// Our pane's current label from `pane list`, or `None` when it has none or the listing
 /// fails. Blocking — the label threads call it, never the frame loop.
 fn current_label(ws: &str, pane: &str) -> Option<String> {

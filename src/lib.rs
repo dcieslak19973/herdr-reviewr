@@ -141,7 +141,13 @@ pub fn run() -> Result<()> {
         app.status = format!("load failed: {e}");
     }
     let result = event_loop(&mut terminal, &mut app, &cfg, kbd);
-    herdr::clear_pane_label();
+    // A user quit tears our own pane down (like every herdr pane plugin); any other exit
+    // only clears the cosmetic label and leaves the pane (`specs/herdr-host.md` Pane identity).
+    if app.should_quit {
+        herdr::close_pane();
+    } else {
+        herdr::clear_pane_label();
+    }
     result
 }
 
